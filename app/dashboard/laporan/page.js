@@ -1,7 +1,6 @@
 'use client'
-export const dynamic = 'force-dynamic'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { useSearchParams } from 'next/navigation'
@@ -95,7 +94,10 @@ function MonthYearPicker({ bulan, tahun, onChange, onClose }) {
   )
 }
 
-export default function LaporanPage() {
+// ─────────────────────────────────────────────────────────────
+// Inner component — berisi useSearchParams, dibungkus Suspense
+// ─────────────────────────────────────────────────────────────
+function LaporanPageInner() {
   const [filterBulan, setFilterBulan] = useState(new Date().getMonth() + 1)
   const [filterTahun, setFilterTahun] = useState(new Date().getFullYear())
   const [showPicker, setShowPicker] = useState(false)
@@ -193,7 +195,6 @@ export default function LaporanPage() {
               <span>📉 Keluar: {fmt(totalKeluar)}</span>
               <span>💰 Saving: {savingRate}%</span>
             </div>
-            
           </div>
 
           {/* Cashflow Harian */}
@@ -263,7 +264,7 @@ export default function LaporanPage() {
 
           {/* Detail Transaksi */}
           <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px' }}>
-            <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)', marginBottom: '16px',padding: '20px 20px 16px' }}>
+            <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)', marginBottom: '16px', padding: '20px 20px 16px' }}>
               Detail Transaksi · {transaksi.length} transaksi
             </div>
             {transaksi.length === 0 ? (
@@ -271,13 +272,13 @@ export default function LaporanPage() {
             ) : (
               transaksi.map((tx, i) => (
                 <div onClick={() => {
-  const next = selectedId === tx.id ? null : tx.id
-  setSelectedId(next)
-  router.replace(next ? `?detail=${next}` : '?', { scroll: false })
-}} key={tx.id} style={{
+                  const next = selectedId === tx.id ? null : tx.id
+                  setSelectedId(next)
+                  router.replace(next ? `?detail=${next}` : '?', { scroll: false })
+                }} key={tx.id} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   padding: '12px 20px', borderBottom: i < transaksi.length - 1 ? '1px solid var(--border)' : 'none',
-  cursor: 'pointer', background: selectedId === tx.id ? 'var(--primary-light)' : 'transparent'
+                  cursor: 'pointer', background: selectedId === tx.id ? 'var(--primary-light)' : 'transparent'
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                     <div style={{
@@ -304,5 +305,18 @@ export default function LaporanPage() {
         </>
       )}
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Export utama — bungkus dengan Suspense
+// ─────────────────────────────────────────────────────────────
+export default function LaporanPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>Memuat...</div>
+    }>
+      <LaporanPageInner />
+    </Suspense>
   )
 }

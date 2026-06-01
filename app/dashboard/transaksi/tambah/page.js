@@ -1,11 +1,10 @@
 'use client'
-export const dynamic = 'force-dynamic'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-export default function TambahTransaksiPage() {
+function TambahTransaksiPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const editId = searchParams.get('id')
@@ -34,7 +33,6 @@ export default function TambahTransaksiPage() {
     setKategori(k || [])
 
     if (isEdit) {
-      // Load data transaksi yang akan diedit
       const { data: tx } = await supabase.from('transactions')
         .select('*').eq('id', editId).single()
       if (tx) {
@@ -64,21 +62,17 @@ export default function TambahTransaksiPage() {
     const { data: { user } } = await supabase.auth.getUser()
 
     if (isEdit) {
-      // Mode edit — revert saldo lama lalu apply saldo baru
       const akun = akuns.find(a => a.id === form.account_id)
       const akunLama = akuns.find(a => a.id === originalTx.account_id)
 
-      // Revert saldo transaksi lama
       if (akunLama) {
         const revertedBalance = originalTx.type === 'income'
           ? akunLama.balance - originalTx.amount
           : akunLama.balance + originalTx.amount
         await supabase.from('accounts').update({ balance: revertedBalance }).eq('id', akunLama.id)
-        // Update local state
         akunLama.balance = revertedBalance
       }
 
-      // Update transaksi
       const { error: updateErr } = await supabase.from('transactions').update({
         type: form.type,
         amount: parseFloat(form.amount),
@@ -90,7 +84,6 @@ export default function TambahTransaksiPage() {
 
       if (updateErr) { setError(updateErr.message); setSaving(false); return }
 
-      // Apply saldo baru
       if (akun) {
         const newBalance = form.type === 'income'
           ? akun.balance + parseFloat(form.amount)
@@ -99,7 +92,6 @@ export default function TambahTransaksiPage() {
       }
 
     } else {
-      // Mode tambah
       const { error: insertErr } = await supabase.from('transactions').insert({
         user_id: user.id,
         type: form.type,
@@ -258,5 +250,15 @@ export default function TambahTransaksiPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function TambahTransaksiPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>Memuat...</div>
+    }>
+      <TambahTransaksiPageInner />
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
@@ -402,10 +402,14 @@ function DetailContent({ basePath, detailId }) {
   return null
 }
 
-export default function DashboardLayout({ children }) {
+// ─────────────────────────────────────────────────────────────
+// Komponen inner yang menggunakan useSearchParams
+// Dibungkus Suspense di DashboardLayout agar build tidak error
+// ─────────────────────────────────────────────────────────────
+function DashboardLayoutInner({ children }) {
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams()
+  const searchParams = useSearchParams()          // ← dipindah ke sini
   const detailId = searchParams.get('detail')
   const [user, setUser] = useState(null)
   const { theme, setTheme } = useTheme()
@@ -494,8 +498,8 @@ export default function DashboardLayout({ children }) {
         <div style={{ padding: '12px 10px', flex: 1 }}>
           {menuItems.map(item => {
             const isActive = item.href === '/dashboard'
-  ? pathname === '/dashboard'
-  : pathname === item.href || pathname.startsWith(item.href + '/')
+              ? pathname === '/dashboard'
+              : pathname === item.href || pathname.startsWith(item.href + '/')
             return (
               <div key={item.href} onClick={() => router.push(item.href)} style={{
                 display: 'flex', alignItems: 'center', gap: '10px',
@@ -582,5 +586,23 @@ export default function DashboardLayout({ children }) {
         )}
       </div>
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Export utama — bungkus DashboardLayoutInner dengan Suspense
+// ─────────────────────────────────────────────────────────────
+export default function DashboardLayout({ children }) {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--text)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
+          <div style={{ color: 'var(--text-muted)' }}>Memuat...</div>
+        </div>
+      </div>
+    }>
+      <DashboardLayoutInner>{children}</DashboardLayoutInner>
+    </Suspense>
   )
 }
