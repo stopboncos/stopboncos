@@ -1,26 +1,121 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #F4F4F8;
+  --bg-card: #FFFFFB;
+  --border: #E8E8EF;
+  --text: #1A1A2E;
+  --text-muted: #8888A8;
+  --primary: #5B5F97;
+  --primary-light: #EBEBF5;
+  --accent: #FFC145;
+  --accent-light: #FFF8E8;
+  --danger: #FF6B6C;
+  --danger-light: #FFF0F0;
+  --secondary: #B8B8D1;
+  --sidebar-bg: #FFFFFB;
+  --sidebar-border: #E8E8EF;
+  --sidebar-text: #8888A8;
+  --sidebar-text-active: #5B5F97;
+  --sidebar-active-bg: #EBEBF5;
+  --topbar-bg: #FFFFFB;
+  --background: #F4F4F8;
+  --foreground: #1A1A2E;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+.dark {
+  --bg: #12121E;
+  --bg-card: #1C1C2E;
+  --border: #2A2A3E;
+  --text: #EEEEF8;
+  --text-muted: #7878A8;
+  --primary: #7B7FC4;
+  --primary-light: #22223A;
+  --accent: #FFC145;
+  --accent-light: #2A2210;
+  --danger: #FF6B6C;
+  --danger-light: #2A1010;
+  --secondary: #5B5F97;
+  --sidebar-bg: #0E0E1A;
+  --sidebar-border: #2A2A3E;
+  --sidebar-text: #7878A8;
+  --sidebar-text-active: #EEEEF8;
+  --sidebar-active-bg: rgba(91,95,151,0.2);
+  --topbar-bg: #1C1C2E;
+  --background: #12121E;
+  --foreground: #EEEEF8;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* html, body {
+  overflow-x: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
+} */
+
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  transition: background 0.2s, color 0.2s;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-carousel {
+  display: none;
+  width: 100%;
+  /* overflow: hidden; */
+  margin-bottom: 20px;
+}
+
+.section-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.akun-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+img.app-logo {
+  width: 160px;
+  height: 80px;
+  margin: auto;
+  display: block;
+}
+
+img.app-logo-lg {
+  width: 250px;
+    height: auto;
+    margin: 20px auto 20px;
+    display: block;
+}
+
+
+
+@media (max-width: 767px) {
+  .stat-grid { display: none; }
+  .stat-carousel { display: block; }
+  .section-row { grid-template-columns: 1fr; }
+  .transaksi-summary { grid-template-columns: 1fr !important; }
+  .early-banner { margin-bottom: 28px !important; }
+  .life-time { margin-top: 10px !important; margin-bottom: 50px !important; }
+  .akun-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 768px) {
+  .action-btn-mobile { display: none !important; }
 }
