@@ -44,12 +44,14 @@ export async function POST(req) {
       return Response.json({ ok: true })
     }
 
-    const { data: linkData } = await supabase
+    console.log('Mencari kode:', kode)
+    const { data: linkData, error: linkError } = await supabase
       .from('telegram_link_codes')
       .select('*')
       .eq('code', kode)
-      .gt('expires_at', new Date().toISOString())
       .single()
+    console.log('linkData:', JSON.stringify(linkData))
+    console.log('linkError:', JSON.stringify(linkError))
 
     if (!linkData) {
       await sendMessage(chatId, '❌ Kode tidak valid atau sudah expired. Buat kode baru di halaman Profil.')

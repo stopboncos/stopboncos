@@ -21,6 +21,10 @@ export default function ProfilPage() {
   const [savingPass, setSavingPass] = useState(false)
   const [passMsg, setPassMsg] = useState(null)
 
+  // Telegram
+  const [telegramKode, setTelegramKode] = useState(null)
+  const [generatingKode, setGeneratingKode] = useState(false)
+
   useEffect(() => {
     fetchProfile()
   }, [])
@@ -32,6 +36,13 @@ export default function ProfilPage() {
       const { data } = await supabase.from('users').select('*').eq('id', user.id).single()
       setProfile(data)
       setFullName(data?.full_name || '')
+    }
+    // Reset kode lama yang expired
+    if (user) {
+      await supabase.from('telegram_link_codes')
+        .delete()
+        .eq('user_id', user.id)
+        .lt('expires_at', new Date().toISOString())
     }
     setLoading(false)
   }
@@ -79,6 +90,26 @@ export default function ProfilPage() {
     }
     setSavingPass(false)
     setTimeout(() => setPassMsg(null), 3000)
+  }
+  const handleGenerateKode = async () => {
+    setGeneratingKode(true)
+    setTelegramKode(null)
+
+    // Hapus kode lama
+    await supabase.from('telegram_link_codes').delete().eq('user_id', user.id)
+
+    // Generate kode unik
+    const kode = 'SBC-' + Math.random().toString(36).substring(2, 8).toUpperCase()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10 menit
+
+    const { error } = await supabase.from('telegram_link_codes').insert({
+      user_id: user.id,
+      code: kode,
+      expires_at: expiresAt,
+    })
+
+    if (!error) setTelegramKode(kode)
+    setGeneratingKode(false)
   }
 
   if (loading) return (
@@ -281,13 +312,31 @@ export default function ProfilPage() {
             </div>
 
             <div>
-              <label style={labelStyle}>Telegram Chat ID</label>
-              <input
-                value={profile?.telegram_chat_id || ''}
-                readOnly
-                placeholder="Belum dikonfigurasi"
-                style={inputReadonlyStyle}
-              />
+              <label style={labelStyle}>Telegram</label>
+              {profile?.telegram_chat_id ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input value={profile.telegram_chat_id} readOnly style={inputReadonlyStyle} />
+                  <span style={{ fontSize: '12px', color: '#22C55E', whiteSpace: 'nowrap' }}>✅ Terhubung</span>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                    Belum terhubung. Generate kode lalu kirim ke <strong>@StopboncosBot</strong> di Telegram.
+                  </div>
+                  <button onClick={handleGenerateKode} disabled={generatingKode} style={{ ...btnPrimary, opacity: generatingKode ? 0.7 : 1, marginBottom: telegramKode ? '12px' : '0' }}>
+                    {generatingKode ? 'Generating...' : '🔗 Generate Kode'}
+                  </button>
+                  {telegramKode && (
+                    <div style={{ marginTop: '12px', background: 'var(--primary-light)', borderRadius: '10px', padding: '14px' }}>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Kirim perintah ini ke @StopboncosBot:</div>
+                      <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--primary)', letterSpacing: '1px', marginBottom: '6px' }}>
+                        /link {telegramKode}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>⏱ Kode berlaku 10 menit</div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
