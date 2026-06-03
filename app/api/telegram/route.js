@@ -43,7 +43,9 @@ export async function POST(req) {
       await sendMessage(chatId, '❌ Format: /link KODE_UNIK\n\nDapatkan kode di halaman Profil Stopboncos.')
       return Response.json({ ok: true })
     }
-
+console.log('Raw text received:', text)
+    console.log('Parts:', JSON.stringify(parts))
+    console.log('Kode yang dicari:', kode)
     console.log('Mencari kode:', kode)
     const { data: linkData, error: linkError } = await supabase
       .from('telegram_link_codes')
