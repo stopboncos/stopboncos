@@ -3,17 +3,39 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 const PERIODE = ['Bulanan', 'Mingguan', 'Tahunan']
 
 export default function TargetPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const detailId = searchParams.get('detail')
+  const [isMobile, setIsMobile] = useState(false)
+
   const [targets, setTargets] = useState([])
   const [kategori, setKategori] = useState([])
   const [loading, setLoading] = useState(true)
+
+  // Modal tambah
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ category_id: '', quota: '', period: 'Bulanan', warning_pct: 80, start_date: new Date().toISOString().slice(0, 7) })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // Modal edit (mobile)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editTarget, setEditTarget] = useState(null)
+  const [editForm, setEditForm] = useState({})
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   useEffect(() => { fetchData() }, [])
 
@@ -52,20 +74,93 @@ export default function TargetPage() {
     setSaving(false)
   }
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (id, e) => {
+    e?.stopPropagation()
     if (!confirm('Hapus target ini?')) return
     await supabase.from('targets').delete().eq('id', id)
     fetchData()
   }
 
+  const openEditModal = (target, e) => {
+    e?.stopPropagation()
+    setEditTarget(target)
+    setEditForm({
+      category_id: target.category_id,
+      quota: String(target.quota),
+      period: target.period,
+      warning_pct: target.warning_pct,
+      start_date: target.start_date?.slice(0, 7) || new Date().toISOString().slice(0, 7),
+    })
+    setEditError('')
+    setShowEditModal(true)
+  }
+
+  const handleEditSave = async () => {
+    if (!editForm.quota) { setEditError('Kuota wajib diisi'); return }
+    setEditSaving(true)
+    setEditError('')
+    const { error } = await supabase.from('targets').update({
+      category_id: editForm.category_id,
+      quota: parseFloat(editForm.quota),
+      period: editForm.period,
+      warning_pct: parseInt(editForm.warning_pct),
+      start_date: editForm.start_date + '-01',
+    }).eq('id', editTarget.id)
+    if (error) setEditError(error.message)
+    else {
+      setShowEditModal(false)
+      fetchData()
+    }
+    setEditSaving(false)
+  }
+
   const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
 
-  const getPct = (spent, quota) => Math.min(Math.round((spent / quota) * 100), 100)
-  const getStatus = (pct, warning) => {
-    if (pct >= 100) return { label: 'Melebihi kuota', color: 'var(--danger)', bg: 'var(--danger-light)' }
-    if (pct >= warning) return { label: 'Hampir habis', color: 'var(--accent)', bg: 'var(--accent-light)' }
-    return { label: 'Aman', color: '#22C55E', bg: '#F0FDF4' }
+  const inputStyle = {
+    width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
+    borderRadius: '8px', fontSize: '14px', background: 'var(--bg)',
+    color: 'var(--text)', boxSizing: 'border-box',
   }
+
+  const modalForm = (formData, setFormData) => (
+    <>
+      {/* Kategori */}
+      <div style={{ marginBottom: '14px' }}>
+        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kategori *</label>
+        <select value={formData.category_id} onChange={e => setFormData({ ...formData, category_id: e.target.value })} style={inputStyle}>
+          <option value="">Pilih kategori...</option>
+          {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+        </select>
+      </div>
+      {/* Kuota */}
+      <div style={{ marginBottom: '14px' }}>
+        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kuota Maksimal (Rp) *</label>
+        <input type="number" value={formData.quota} onChange={e => setFormData({ ...formData, quota: e.target.value })} placeholder="0" style={inputStyle} />
+      </div>
+      {/* Periode & Mulai */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+        <div>
+          <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Periode</label>
+          <select value={formData.period} onChange={e => setFormData({ ...formData, period: e.target.value })} style={inputStyle}>
+            {PERIODE.map(p => <option key={p}>{p}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Mulai</label>
+          <input type="month" value={formData.start_date} onChange={e => setFormData({ ...formData, start_date: e.target.value })} style={inputStyle} />
+        </div>
+      </div>
+      {/* Warning */}
+      <div style={{ marginBottom: '20px' }}>
+        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
+          Peringatan di (%) — sekarang: {formData.warning_pct}%
+        </label>
+        <input type="range" min="50" max="95" step="5" value={formData.warning_pct}
+          onChange={e => setFormData({ ...formData, warning_pct: e.target.value })}
+          style={{ width: '100%' }} />
+      </div>
+    </>
+  )
 
   return (
     <div>
@@ -92,58 +187,61 @@ export default function TargetPage() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {targets.map(target => {
-            const spent = 0 // nanti diisi dari transaksi
-            const pct = getPct(spent, target.quota)
-            const status = getStatus(pct, target.warning_pct)
-            return (
-              <div key={target.id} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{
-                      width: '42px', height: '42px', borderRadius: '10px',
-                      background: (target.categories?.color || '#5B5F97') + '22',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px'
-                    }}>{target.categories?.icon || '🎯'}</div>
-                    <div>
-                      <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>{target.categories?.name || 'Kategori'}</div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{target.period} · Peringatan di {target.warning_pct}%</div>
+          {targets.map(target => (
+            <div
+              key={target.id}
+              onClick={() => !isMobile && router.push(detailId === target.id ? '?' : `?detail=${target.id}`)}
+              style={{
+                background: detailId === target.id ? 'var(--primary-light)' : 'var(--bg-card)',
+                border: detailId === target.id ? '1.5px solid var(--primary)' : '1px solid var(--border)',
+                borderRadius: '12px', padding: '20px',
+                cursor: isMobile ? 'default' : 'pointer',
+                transition: 'background 0.15s',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                  <div style={{
+                    width: '42px', height: '42px', borderRadius: '10px', flexShrink: 0,
+                    background: (target.categories?.color || '#5B5F97') + '22',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px'
+                  }}>{target.categories?.icon || '🎯'}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>{target.categories?.name || 'Kategori'}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {target.period} · Kuota {fmt(target.quota)}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '1px' }}>
+                      Peringatan di {target.warning_pct}%
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: '500', color: status.color, background: status.bg, padding: '4px 10px', borderRadius: '20px' }}>
-                      {status.label}
-                    </span>
-                    <button onClick={() => handleDelete(target.id)} style={{
+                </div>
+                {/* Tombol edit & hapus — mobile only */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  <button
+                    className="action-btn-mobile"
+                    onClick={(e) => openEditModal(target, e)}
+                    style={{
+                      background: 'var(--primary-light)', color: 'var(--primary)',
+                      border: 'none', borderRadius: '6px', padding: '5px 7px',
+                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                    }}>✏️</button>
+                  <button
+                    className="action-btn-mobile"
+                    onClick={(e) => handleDelete(target.id, e)}
+                    style={{
                       background: 'var(--danger-light)', color: 'var(--danger)',
-                      border: 'none', borderRadius: '6px', padding: '5px 10px',
-                      cursor: 'pointer', fontSize: '12px', fontWeight: '500'
-                    }}>Hapus</button>
-                  </div>
-                </div>
-
-                {/* Progress */}
-                <div style={{ marginBottom: '8px' }}>
-                  <div style={{ height: '8px', background: 'var(--border)', borderRadius: '4px', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%', borderRadius: '4px', transition: 'width 0.5s ease',
-                      width: pct + '%',
-                      background: pct >= 100 ? 'var(--danger)' : pct >= target.warning_pct ? 'var(--accent)' : 'var(--primary)'
-                    }} />
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Terpakai: <strong style={{ color: 'var(--text)' }}>{fmt(spent)}</strong></span>
-                  <span style={{ color: 'var(--text-muted)' }}>Kuota: <strong style={{ color: 'var(--text)' }}>{fmt(target.quota)}</strong></span>
+                      border: 'none', borderRadius: '6px', padding: '5px 7px',
+                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                    }}>🗑️</button>
                 </div>
               </div>
-            )
-          })}
+            </div>
+          ))}
         </div>
       )}
 
-      {/* MODAL */}
+      {/* MODAL TAMBAH */}
       {showModal && (
         <div onClick={() => setShowModal(false)} style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
@@ -158,66 +256,13 @@ export default function TargetPage() {
               <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>Tambah Target</h2>
               <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
             </div>
-
             {error && <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
-
             {kategori.length === 0 && (
               <div style={{ background: 'var(--accent-light)', color: 'var(--accent)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>
                 ⚠ Belum ada kategori pengeluaran. Buat kategori dulu.
               </div>
             )}
-
-            {/* Kategori */}
-            <div style={{ marginBottom: '14px' }}>
-              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kategori *</label>
-              <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })} style={{
-                width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
-                borderRadius: '8px', fontSize: '14px', background: 'var(--bg)', color: 'var(--text)', boxSizing: 'border-box'
-              }}>
-                <option value="">Pilih kategori...</option>
-                {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
-              </select>
-            </div>
-
-            {/* Kuota */}
-            <div style={{ marginBottom: '14px' }}>
-              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kuota Maksimal (Rp) *</label>
-              <input type="number" value={form.quota} onChange={e => setForm({ ...form, quota: e.target.value })} placeholder="0" style={{
-                width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
-                borderRadius: '8px', fontSize: '14px', background: 'var(--bg)', color: 'var(--text)', boxSizing: 'border-box'
-              }} />
-            </div>
-
-            {/* Periode & Mulai */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
-              <div>
-                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Periode</label>
-                <select value={form.period} onChange={e => setForm({ ...form, period: e.target.value })} style={{
-                  width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
-                  borderRadius: '8px', fontSize: '14px', background: 'var(--bg)', color: 'var(--text)', boxSizing: 'border-box'
-                }}>
-                  {PERIODE.map(p => <option key={p}>{p}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Mulai</label>
-                <input type="month" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} style={{
-                  width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
-                  borderRadius: '8px', fontSize: '14px', background: 'var(--bg)', color: 'var(--text)', boxSizing: 'border-box'
-                }} />
-              </div>
-            </div>
-
-            {/* Warning */}
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
-                Peringatan di (%) — sekarang: {form.warning_pct}%
-              </label>
-              <input type="range" min="50" max="95" step="5" value={form.warning_pct}
-                onChange={e => setForm({ ...form, warning_pct: e.target.value })}
-                style={{ width: '100%' }} />
-            </div>
-
+            {modalForm(form, setForm)}
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowModal(false)} style={{
                 padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)',
@@ -228,6 +273,38 @@ export default function TargetPage() {
                 border: 'none', borderRadius: '8px', fontSize: '13.5px',
                 fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1
               }}>{saving ? 'Menyimpan...' : 'Simpan Target'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EDIT (mobile) */}
+      {showEditModal && (
+        <div onClick={() => setShowEditModal(false)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--bg-card)', borderRadius: '12px',
+            width: '440px', maxWidth: '95vw', padding: '24px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>Edit Target</h2>
+              <button onClick={() => setShowEditModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
+            </div>
+            {editError && <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>{editError}</div>}
+            {modalForm(editForm, setEditForm)}
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowEditModal(false)} style={{
+                padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)',
+                border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer'
+              }}>Batal</button>
+              <button onClick={handleEditSave} disabled={editSaving} style={{
+                padding: '9px 18px', background: 'var(--primary)', color: 'white',
+                border: 'none', borderRadius: '8px', fontSize: '13.5px',
+                fontWeight: '600', cursor: editSaving ? 'not-allowed' : 'pointer', opacity: editSaving ? 0.7 : 1
+              }}>{editSaving ? 'Menyimpan...' : 'Simpan'}</button>
             </div>
           </div>
         </div>

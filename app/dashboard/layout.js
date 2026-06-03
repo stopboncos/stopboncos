@@ -8,16 +8,18 @@ import { useTheme } from 'next-themes'
 const menuItems = [
   { href: '/dashboard', label: 'Dashboard', icon: '📊' },
   { href: '/dashboard/transaksi', label: 'Transaksi', icon: '💸' },
-  { href: '/dashboard/target', label: 'Target', icon: '🎯' },
   { href: '/dashboard/laporan', label: 'Laporan Bulanan', icon: '📋' },
-  { href: '/dashboard/akun', label: 'Dompet', icon: '👛' },
-  { href: '/dashboard/kategori', label: 'Kategori', icon: '🏷️' },
-  { href: '/dashboard/backup', label: 'Backup & Restore', icon: '💾' },
-  { href: '/dashboard/langganan', label: 'Langganan', icon: '🥇' },
+  { href: '/dashboard/langganan', label: 'Langganan', icon: '⭐' },
   { href: '/dashboard/profil', label: 'Profil', icon: '👤' },
 ]
 
-// Halaman yang punya kolom 3
+const konfiguasiItems = [
+  { href: '/dashboard/akun', label: 'Dompet' },
+  { href: '/dashboard/kategori', label: 'Kategori' },
+  { href: '/dashboard/target', label: 'Target' },
+  { href: '/dashboard/backup', label: 'Backup & Restore' },
+]
+
 const detailPages = [
   '/dashboard/transaksi',
   '/dashboard/target',
@@ -35,27 +37,17 @@ const defaultDetailText = {
 }
 
 function DetailPanel({ pathname, detailId }) {
-  // Cari base path (tanpa sub-route tambah/edit)
   const basePath = detailPages.find(p => pathname.startsWith(p)) || null
-
   if (!basePath) return null
-
   if (!detailId) {
     const info = defaultDetailText[basePath]
     return (
-      <div style={{
-        display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-        height: '100%', gap: '12px',
-        color: 'var(--text-muted)',
-      }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '12px', color: 'var(--text-muted)' }}>
         <div style={{ fontSize: '40px' }}>{info?.icon}</div>
         <div style={{ fontSize: '14px', textAlign: 'center' }}>{info?.text}</div>
       </div>
     )
   }
-
-  // Render detail per halaman
   return <DetailContent basePath={basePath} detailId={detailId} />
 }
 
@@ -89,15 +81,12 @@ function DetailContent({ basePath, detailId }) {
         .select('*, accounts(name), categories(name, icon, color)')
         .eq('id', detailId).single()
       result = tx
-
-      // Fetch akun & kategori untuk form edit
       const [{ data: a }, { data: k }] = await Promise.all([
         supabase.from('accounts').select('*').eq('user_id', user.id),
         supabase.from('categories').select('*').eq('user_id', user.id),
       ])
       setAkuns(a || [])
       setKategori(k || [])
-
       if (tx) setForm({
         type: tx.type,
         amount: String(tx.amount),
@@ -115,11 +104,19 @@ function DetailContent({ basePath, detailId }) {
       result = kat
       if (kat) setForm({ name: kat.name, type: kat.type, icon: kat.icon || '', color: kat.color || '' })
     } else if (basePath === '/dashboard/target') {
-      const { data: tgt } = await supabase.from('budgets').select('*, categories(name, icon, color)').eq('id', detailId).single()
+      const { data: tgt } = await supabase.from('targets')
+        .select('*, categories(name, icon, color)')
+        .eq('id', detailId).single()
       result = tgt
-    } else if (basePath === '/dashboard/laporan') {
-      const { data: tx } = await supabase.from('transactions').select('*, accounts(name), categories(name, icon, color)').eq('id', detailId).single()
-      result = tx
+      const { data: k } = await supabase.from('categories').select('*').eq('user_id', user.id).eq('type', 'expense')
+      setKategori(k || [])
+      if (tgt) setForm({
+        category_id: tgt.category_id,
+        quota: String(tgt.quota),
+        period: tgt.period,
+        warning_pct: tgt.warning_pct,
+        start_date: tgt.start_date?.slice(0, 7) || new Date().toISOString().slice(0, 7),
+      })
     }
 
     setData(result)
@@ -129,22 +126,16 @@ function DetailContent({ basePath, detailId }) {
   const handleSave = async () => {
     setSaving(true)
     if (basePath === '/dashboard/transaksi' || basePath === '/dashboard/laporan') {
-      // Revert saldo lama
       const { data: akunLama } = await supabase.from('accounts').select('*').eq('id', data.account_id).single()
       if (akunLama) {
         const reverted = data.type === 'income' ? akunLama.balance - data.amount : akunLama.balance + data.amount
         await supabase.from('accounts').update({ balance: reverted }).eq('id', akunLama.id)
       }
-      // Update transaksi
       await supabase.from('transactions').update({
-        type: form.type,
-        amount: parseFloat(form.amount),
-        account_id: form.account_id,
-        category_id: form.category_id || null,
-        description: form.description,
-        date: form.date,
+        type: form.type, amount: parseFloat(form.amount),
+        account_id: form.account_id, category_id: form.category_id || null,
+        description: form.description, date: form.date,
       }).eq('id', detailId)
-      // Apply saldo baru
       const { data: akunBaru } = await supabase.from('accounts').select('*').eq('id', form.account_id).single()
       if (akunBaru) {
         const newBal = form.type === 'income' ? akunBaru.balance + parseFloat(form.amount) : akunBaru.balance - parseFloat(form.amount)
@@ -154,6 +145,14 @@ function DetailContent({ basePath, detailId }) {
       await supabase.from('accounts').update({ name: form.name }).eq('id', detailId)
     } else if (basePath === '/dashboard/kategori') {
       await supabase.from('categories').update({ name: form.name, type: form.type, icon: form.icon, color: form.color }).eq('id', detailId)
+    } else if (basePath === '/dashboard/target') {
+      await supabase.from('targets').update({
+        category_id: form.category_id,
+        quota: parseFloat(form.quota),
+        period: form.period,
+        warning_pct: parseInt(form.warning_pct),
+        start_date: form.start_date + '-01',
+      }).eq('id', detailId)
     }
     setSaving(false)
     setEditMode(false)
@@ -163,7 +162,6 @@ function DetailContent({ basePath, detailId }) {
   const handleDelete = async () => {
     if (!confirm('Hapus data ini?')) return
     if (basePath === '/dashboard/transaksi' || basePath === '/dashboard/laporan') {
-      // Revert saldo
       const { data: akun } = await supabase.from('accounts').select('*').eq('id', data.account_id).single()
       if (akun) {
         const reverted = data.type === 'income' ? akun.balance - data.amount : akun.balance + data.amount
@@ -174,6 +172,8 @@ function DetailContent({ basePath, detailId }) {
       await supabase.from('accounts').delete().eq('id', detailId)
     } else if (basePath === '/dashboard/kategori') {
       await supabase.from('categories').delete().eq('id', detailId)
+    } else if (basePath === '/dashboard/target') {
+      await supabase.from('targets').delete().eq('id', detailId)
     }
     router.push(pathname)
   }
@@ -227,16 +227,9 @@ function DetailContent({ basePath, detailId }) {
     const filteredKat = kategori.filter(k => k.type === (form.type === 'income' ? 'income' : 'expense'))
     return (
       <div style={{ padding: '24px' }}>
-        {/* Header icon */}
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{
-            width: '56px', height: '56px', borderRadius: '16px', margin: '0 auto 12px',
-            background: (data.categories?.color || '#5B5F97') + '22',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px',
-          }}>{data.categories?.icon || '💸'}</div>
+          <div style={{ width: '56px', height: '56px', borderRadius: '16px', margin: '0 auto 12px', background: (data.categories?.color || '#5B5F97') + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>{data.categories?.icon || '💸'}</div>
         </div>
-
-        {/* Amount */}
         {editMode ? (
           <input type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })}
             style={{ ...inputStyle, fontSize: '22px', fontWeight: '800', textAlign: 'center', marginBottom: '8px', color: form.type === 'income' ? '#22C55E' : 'var(--danger)' }} />
@@ -245,8 +238,6 @@ function DetailContent({ basePath, detailId }) {
             {data.type === 'income' ? '+' : '−'}{fmt(data.amount)}
           </div>
         )}
-
-        {/* Keterangan */}
         {editMode ? (
           <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
             placeholder="Keterangan..." style={{ ...inputStyle, textAlign: 'center', marginBottom: '20px' }} />
@@ -255,8 +246,6 @@ function DetailContent({ basePath, detailId }) {
             {data.description || '(Tanpa keterangan)'}
           </div>
         )}
-
-        {/* Tipe */}
         {editMode ? (
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Tipe</div>
@@ -272,8 +261,6 @@ function DetailContent({ basePath, detailId }) {
             </div>
           </div>
         ) : row('Tipe', data.type === 'income' ? '📈 Pemasukan' : data.type === 'expense' ? '📉 Pengeluaran' : '🔄 Transfer')}
-
-        {/* Akun */}
         {editMode ? (
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Akun</div>
@@ -282,8 +269,6 @@ function DetailContent({ basePath, detailId }) {
             </select>
           </div>
         ) : row('Akun', data.accounts?.name || '—')}
-
-        {/* Kategori */}
         {editMode ? (
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Kategori</div>
@@ -293,15 +278,12 @@ function DetailContent({ basePath, detailId }) {
             </select>
           </div>
         ) : row('Kategori', data.categories ? `${data.categories.icon} ${data.categories.name}` : '—')}
-
-        {/* Tanggal */}
         {editMode ? (
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Tanggal</div>
             <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} style={inputStyle} />
           </div>
         ) : row('Tanggal', new Date(data.date).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}
-
         {actionBtns}
       </div>
     )
@@ -333,11 +315,7 @@ function DetailContent({ basePath, detailId }) {
     return (
       <div style={{ padding: '24px' }}>
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{
-            width: '56px', height: '56px', borderRadius: '16px', margin: '0 auto 12px',
-            background: (data.color || '#5B5F97') + '22',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px',
-          }}>{data.icon || '🏷️'}</div>
+          <div style={{ width: '56px', height: '56px', borderRadius: '16px', margin: '0 auto 12px', background: (data.color || '#5B5F97') + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>{data.icon || '🏷️'}</div>
           {editMode ? (
             <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={{ ...inputStyle, textAlign: 'center', fontSize: '16px', fontWeight: '700' }} />
           ) : (
@@ -372,29 +350,64 @@ function DetailContent({ basePath, detailId }) {
     )
   }
 
-  // Target detail (view only)
+  // Target detail — edit & hapus di kolom 3
   if (basePath === '/dashboard/target') {
-    const pct = data.limit > 0 ? Math.min((data.used / data.limit) * 100, 100) : 0
+    const PERIODE = ['Bulanan', 'Mingguan', 'Tahunan']
     return (
       <div style={{ padding: '24px' }}>
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{ width: '56px', height: '56px', borderRadius: '16px', margin: '0 auto 12px', background: (data.categories?.color || '#5B5F97') + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>{data.categories?.icon || '🎯'}</div>
-          <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text)', marginBottom: '4px' }}>{data.categories?.name || data.name}</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{data.period === 'monthly' ? 'Bulanan' : 'Mingguan'}</div>
-        </div>
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Terpakai</span>
-            <span style={{ fontSize: '12px', fontWeight: '600', color: pct >= 100 ? 'var(--danger)' : pct >= 80 ? 'var(--accent)' : '#22C55E' }}>{pct.toFixed(0)}%</span>
+          <div style={{ width: '56px', height: '56px', borderRadius: '16px', margin: '0 auto 12px', background: (data.categories?.color || '#5B5F97') + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>
+            {data.categories?.icon || '🎯'}
           </div>
-          <div style={{ height: '8px', background: 'var(--border)', borderRadius: '4px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${pct}%`, borderRadius: '4px', background: pct >= 100 ? 'var(--danger)' : pct >= 80 ? 'var(--accent)' : '#22C55E', transition: 'width 0.3s' }} />
+          <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text)', marginBottom: '4px' }}>
+            {data.categories?.name || 'Target'}
           </div>
         </div>
-        {row('Terpakai', fmt(data.used || 0))}
-        {row('Kuota', fmt(data.limit || 0))}
-        {row('Sisa', fmt((data.limit || 0) - (data.used || 0)))}
-        {row('Periode', data.period === 'monthly' ? 'Bulanan' : 'Mingguan')}
+
+        {editMode ? (
+          <>
+            {/* Kategori */}
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Kategori</div>
+              <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })} style={inputStyle}>
+                {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+              </select>
+            </div>
+            {/* Kuota */}
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Kuota Maksimal (Rp)</div>
+              <input type="number" value={form.quota} onChange={e => setForm({ ...form, quota: e.target.value })} style={inputStyle} />
+            </div>
+            {/* Periode & Mulai */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
+              <div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Periode</div>
+                <select value={form.period} onChange={e => setForm({ ...form, period: e.target.value })} style={inputStyle}>
+                  {PERIODE.map(p => <option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Mulai</div>
+                <input type="month" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} style={inputStyle} />
+              </div>
+            </div>
+            {/* Warning */}
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Peringatan di — {form.warning_pct}%</div>
+              <input type="range" min="50" max="95" step="5" value={form.warning_pct}
+                onChange={e => setForm({ ...form, warning_pct: e.target.value })} style={{ width: '100%' }} />
+            </div>
+          </>
+        ) : (
+          <>
+            {row('Kuota', fmt(data.quota))}
+            {row('Periode', data.period)}
+            {row('Peringatan', `${data.warning_pct}%`)}
+            {row('Mulai', new Date(data.start_date).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }))}
+          </>
+        )}
+
+        {actionBtns}
       </div>
     )
   }
@@ -402,21 +415,26 @@ function DetailContent({ basePath, detailId }) {
   return null
 }
 
-// ─────────────────────────────────────────────────────────────
-// Komponen inner yang menggunakan useSearchParams
-// Dibungkus Suspense di DashboardLayout agar build tidak error
-// ─────────────────────────────────────────────────────────────
 function DashboardLayoutInner({ children }) {
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams()          // ← dipindah ke sini
+  const searchParams = useSearchParams()
   const detailId = searchParams.get('detail')
   const [user, setUser] = useState(null)
   const { theme, setTheme } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [konfOpen, setKonfOpen] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('konfOpen') === 'true'
+  })
+
+  const toggleKonf = () => {
+    const next = !konfOpen
+    setKonfOpen(next)
+    localStorage.setItem('konfOpen', String(next))
+  }
   const [isMobile, setIsMobile] = useState(true)
 
-  // Cek apakah halaman ini punya kolom 3
   const basePath = detailPages.find(p => pathname.startsWith(p) && !pathname.includes('/tambah')) || null
   const hasDetailCol = !isMobile && !!basePath
 
@@ -458,76 +476,112 @@ function DashboardLayoutInner({ children }) {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
-
-      {/* OVERLAY mobile */}
       {isMobile && sidebarOpen && (
         <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 99 }} />
       )}
 
-      {/* SIDEBAR — kolom 1 */}
       <nav style={{
-        width: '240px',
-        background: 'var(--sidebar-bg)',
-        borderRight: '1px solid var(--sidebar-border)',
-        display: 'flex', flexDirection: 'column',
-        position: 'fixed', top: 0, left: 0,
-        height: '100vh', zIndex: 100,
-        overflowY: 'auto',
-        transition: 'transform 0.3s ease',
+        width: '240px', background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)',
+        display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0,
+        height: '100vh', zIndex: 100, overflowY: 'auto', transition: 'transform 0.3s ease',
         transform: isMobile && !sidebarOpen ? 'translateX(-100%)' : 'translateX(0)',
       }}>
-        {/* Logo */}
         <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--sidebar-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <img className="app-logo" src="/logo.svg" alt="Stopboncos" />
           {isMobile && (
             <button onClick={() => setSidebarOpen(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
           )}
         </div>
-
-        {/* User Info */}
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--sidebar-border)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: '600', color: 'white', flexShrink: 0 }}>
-            {user.email.charAt(0).toUpperCase()}
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '12.5px', fontWeight: '500', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.email}</div>
-          </div>
-        </div>
-
-        {/* Nav Items */}
+        
         <div style={{ padding: '12px 10px', flex: 1 }}>
-          {menuItems.map(item => {
-            const isActive = item.href === '/dashboard'
-              ? pathname === '/dashboard'
-              : pathname === item.href || pathname.startsWith(item.href + '/')
-            return (
-              <div key={item.href} onClick={() => router.push(item.href)} style={{
-                display: 'flex', alignItems: 'center', gap: '10px',
-                padding: '9px 12px', cursor: 'pointer',
-                fontSize: '13.5px', borderRadius: '8px',
-                marginBottom: '2px', transition: 'all 0.15s',
-                background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
-                color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-                fontWeight: isActive ? '600' : '400',
-                borderLeft: isActive ? '3px solid var(--primary)' : '3px solid transparent',
-              }}>
-                <span style={{ fontSize: '16px' }}>{item.icon}</span>
-                <span>{item.label}</span>
+          {/* Konfigurasi Accordion */}
+          <div style={{ marginBottom: '15px' }}>
+            <div onClick={toggleKonf} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '9px 12px', cursor: 'pointer',
+              fontSize: '13.5px', borderRadius: '8px',
+              color: konfOpen ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+              background: konfOpen ? 'var(--sidebar-active-bg)' : 'transparent',
+              transition: 'all 0.15s',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '16px' }}>⚙️</span>
+                <span>Konfigurasi</span>
               </div>
-            )
-          })}
-        </div>
+              <span style={{
+                fontSize: '14px', color: 'var(--text-muted)',
+                transition: 'transform 0.2s',
+                display: 'inline-block',
+                transform: konfOpen ? 'rotate(180deg)' : 'rotate(0deg)'
+              }}>▼</span>
+            </div>
+            {konfOpen && (
+              <div style={{ paddingLeft: '16px', marginTop: '2px' }}>
+                {konfiguasiItems.map(item => {
+                  const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+                  return (
+                    <div key={item.href} onClick={() => router.push(item.href)} style={{
+                      padding: '8px 12px', cursor: 'pointer',
+                      fontSize: '14px', borderRadius: '8px',
+                      marginBottom: '1px', transition: 'all 0.15s',
+                      background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
+                      color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+                      fontWeight: isActive ? '600' : '400',
+                    }}>
+                      {item.label}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
 
-        {/* Bottom */}
+          {menuItems.map((item, idx) => {
+  if (item.type === 'section') return (
+    <div key={idx} style={{
+      padding: '12px 12px 4px',
+      fontSize: '10px', fontWeight: '600',
+      color: 'var(--text-muted)',
+      textTransform: 'uppercase', letterSpacing: '0.8px'
+    }}>{item.label}</div>
+  )
+  const isActive = item.href === '/dashboard'
+    ? pathname === '/dashboard'
+    : pathname === item.href || pathname.startsWith(item.href + '/')
+  return (
+    <div key={item.href} onClick={() => router.push(item.href)} style={{
+      display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', cursor: 'pointer',
+      fontSize: '16.5px', borderRadius: '8px',
+              marginBottom: '15px', transition: 'all 0.15s',
+              background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
+              color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+              fontWeight: isActive ? '600' : '400',
+    }}>
+      <span style={{ fontSize: '16px' }}>{item.icon}</span>
+      <span>{item.label}</span>
+    </div>
+  )
+})}
+        </div>
         <div style={{ padding: '12px 10px', borderTop: '1px solid var(--sidebar-border)' }}>
-          <div onClick={toggleTheme} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px', borderRadius: '8px', color: 'var(--sidebar-text)', marginBottom: '2px' }}
+          <div onClick={toggleTheme} style={{
+              display: 'flex', alignItems: 'center', gap: '10px',
+              padding: '9px 12px', cursor: 'pointer',
+              fontSize: '16.5px', borderRadius: '8px',
+              color: 'var(--sidebar-text)', marginBottom: '2px',
+            }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--sidebar-active-bg)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
             <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
             <span>{theme === 'dark' ? 'Mode Terang' : 'Mode Gelap'}</span>
           </div>
-          <div onClick={handleLogout} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px', borderRadius: '8px', color: 'var(--danger)' }}
+          <div onClick={handleLogout} style={{
+              display: 'flex', alignItems: 'center', gap: '10px',
+              padding: '9px 12px', cursor: 'pointer',
+              fontSize: '16.5px', borderRadius: '8px',
+              color: 'var(--danger)',
+            }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--danger-light)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
@@ -537,50 +591,28 @@ function DashboardLayoutInner({ children }) {
         </div>
       </nav>
 
-      {/* MAIN CONTENT AREA */}
-      <div style={{
-        marginLeft: isMobile ? '0' : '240px',
-        flex: 1, display: 'flex',
-        height: '100vh', minWidth: 0, maxWidth: '100%',
-        overflow: 'hidden',
-      }}>
-        {/* FLOATING BURGER - mobile only */}
+      <div style={{ marginLeft: isMobile ? '0' : '240px', flex: 1, display: 'flex', height: '100vh', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
         {isMobile && (
           <button onClick={() => setSidebarOpen(true)} style={{
             position: 'fixed', bottom: '24px', right: '24px',
-            width: '48px', height: '48px',
-            background: 'var(--primary)', color: 'white',
-            border: 'none', borderRadius: '25%',
-            fontSize: '30px', lineHeight: 1, cursor: 'pointer',
+            width: '48px', height: '48px', background: 'var(--primary)', color: 'white',
+            border: 'none', borderRadius: '25%', fontSize: '30px', lineHeight: 1, cursor: 'pointer',
             zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', paddingBottom: '5px',
           }}>☰</button>
         )}
-
-        {/* KOLOM 2 — konten halaman, scrollable */}
         <div style={{
           flex: hasDetailCol ? '0 0 auto' : 1,
           width: hasDetailCol ? 'calc(100% - 640px)' : '100%',
           padding: isMobile ? '16px' : '28px',
           minWidth: 0,
           borderRight: hasDetailCol ? '1px solid var(--border)' : 'none',
-          overflowY: 'auto',
-          height: '100vh',
+          overflowY: 'auto', height: '100vh',
         }}>
           {children}
         </div>
-
-        {/* KOLOM 3 — fixed, tidak scroll bersama kolom 2 */}
         {hasDetailCol && (
-          <div style={{
-            width: '640px',
-            flexShrink: 0,
-            background: 'var(--bg-card)',
-            overflowY: 'auto',
-            height: '100vh',
-            position: 'sticky',
-            top: 0,
-          }}>
+          <div style={{ width: '640px', flexShrink: 0, background: 'var(--bg-card)', overflowY: 'auto', height: '100vh', position: 'sticky', top: 0 }}>
             <DetailPanel pathname={pathname} detailId={detailId} />
           </div>
         )}
@@ -589,9 +621,6 @@ function DashboardLayoutInner({ children }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────
-// Export utama — bungkus DashboardLayoutInner dengan Suspense
-// ─────────────────────────────────────────────────────────────
 export default function DashboardLayout({ children }) {
   return (
     <Suspense fallback={
