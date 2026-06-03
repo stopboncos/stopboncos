@@ -30,11 +30,22 @@ export async function POST(req) {
   const command = parts[0]?.toLowerCase()
 
   // Cek user terhubung
-  const { data: userData } = await supabase
-    .from('users')
-    .select('*')
-    .eq('telegram_chat_id', String(chatId))
-    .single()
+    console.log('Mencari user dengan chat_id:', String(chatId))
+  console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
+  let userData = null
+  let userError = null
+  try {
+    const result = await Promise.race([
+      supabase.from('users').select('*').eq('telegram_chat_id', String(chatId)).single(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 5000))
+    ])
+    userData = result.data
+    userError = result.error
+  } catch (e) {
+    console.log('Query error/timeout:', e.message)
+  }
+  console.log('userData:', JSON.stringify(userData))
+  console.log('userError:', JSON.stringify(userError))
 
   // Command /link
   if (command === '/link') {
