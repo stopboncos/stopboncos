@@ -19,52 +19,68 @@ function fmt(n) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
 }
 
+// Parse tanggal dari format dd/mm/yy atau dd/mm/yyyy
+function parseDate(str) {
+  if (!str) return new Date().toISOString().slice(0, 10)
+  const parts = str.split('/')
+  if (parts.length !== 3) return new Date().toISOString().slice(0, 10)
+  const [d, m, y] = parts
+  const year = y.length === 2 ? '20' + y : y
+  return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+}
+
+// Ambil session
+async function getSession(chatId) {
+  const { data } = await supabase
+    .from('telegram_sessions')
+    .select('state')
+    .eq('chat_id', String(chatId))
+    .single()
+  return data?.state || null
+}
+
+// Simpan session
+async function setSession(chatId, state) {
+  await supabase.from('telegram_sessions').upsert({
+    chat_id: String(chatId),
+    state,
+    updated_at: new Date().toISOString()
+  })
+}
+
+// Hapus session
+async function clearSession(chatId) {
+  await supabase.from('telegram_sessions').delete().eq('chat_id', String(chatId))
+}
+
 export async function POST(req) {
   const body = await req.json()
   const message = body?.message
   if (!message) return Response.json({ ok: true })
 
   const chatId = message.chat.id
-  const text = message.text || ''
-  const parts = text.trim().split(/\s+/)
-  const command = parts[0]?.toLowerCase()
+  const text = (message.text || '').trim()
 
   // Cek user terhubung
-    console.log('Mencari user dengan chat_id:', String(chatId))
-  console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
-  let userData = null
-  let userError = null
-  try {
-    const result = await Promise.race([
-      supabase.from('users').select('*').eq('telegram_chat_id', String(chatId)).single(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 5000))
-    ])
-    userData = result.data
-    userError = result.error
-  } catch (e) {
-    console.log('Query error/timeout:', e.message)
-  }
-  console.log('userData:', JSON.stringify(userData))
-  console.log('userError:', JSON.stringify(userError))
+  const { data: userData } = await supabase
+    .from('users')
+    .select('*')
+    .eq('telegram_chat_id', String(chatId))
+    .single()
 
   // Command /link
-  if (command === '/link') {
-    const kode = parts[1]
+  if (text.startsWith('/link')) {
+    const kode = text.split(/\s+/)[1]
     if (!kode) {
       await sendMessage(chatId, '❌ Format: /link KODE_UNIK\n\nDapatkan kode di halaman Profil Stopboncos.')
       return Response.json({ ok: true })
     }
-console.log('Raw text received:', text)
-    console.log('Parts:', JSON.stringify(parts))
-    console.log('Kode yang dicari:', kode)
-    console.log('Mencari kode:', kode)
-    const { data: linkData, error: linkError } = await supabase
+
+    const { data: linkData } = await supabase
       .from('telegram_link_codes')
       .select('*')
       .eq('code', kode)
       .single()
-    console.log('linkData:', JSON.stringify(linkData))
-    console.log('linkError:', JSON.stringify(linkError))
 
     if (!linkData) {
       await sendMessage(chatId, '❌ Kode tidak valid atau sudah expired. Buat kode baru di halaman Profil.')
@@ -73,7 +89,6 @@ console.log('Raw text received:', text)
 
     await supabase.from('users').update({ telegram_chat_id: String(chatId) }).eq('id', linkData.user_id)
     await supabase.from('telegram_link_codes').delete().eq('code', kode)
-
     await sendMessage(chatId, '✅ Akun berhasil terhubung ke Stopboncos!\n\nKetik /help untuk melihat perintah yang tersedia.')
     return Response.json({ ok: true })
   }
@@ -84,133 +99,189 @@ console.log('Raw text received:', text)
     return Response.json({ ok: true })
   }
 
-  // Command /help
-  if (command === '/help') {
-    await sendMessage(chatId, `🤖 <b>Stopboncos Bot</b>\n\nPerintah yang tersedia:\n\n💸 <b>Catat pengeluaran:</b>\n/tx 25000 makan siang\n\n📈 <b>Catat pemasukan:</b>\n/in 2000000 gaji april\n\n💰 <b>Cek saldo:</b>\n/saldo\n\n📋 <b>Ringkasan bulan ini:</b>\n/laporan\n\n🎯 <b>Status target:</b>\n/target`)
+  // Cek session aktif (step by step input)
+  const session = await getSession(chatId)
+
+  // ===== HANDLE SESSION STATE =====
+  if (session) {
+    // Step: pilih kategori
+    if (session.step === 'pilih_kategori') {
+      const idx = parseInt(text) - 1
+      if (isNaN(idx) || idx < 0 || idx >= session.kategori.length) {
+        await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nomor yang tersedia.')
+        return Response.json({ ok: true })
+      }
+
+      const kat = session.kategori[idx]
+      const newSession = { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name }
+      await setSession(chatId, newSession)
+
+      // Ambil dompet
+      const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
+      if (!akuns?.length) {
+        await clearSession(chatId)
+        await sendMessage(chatId, '❌ Belum ada dompet. Tambah dompet di Stopboncos dulu.')
+        return Response.json({ ok: true })
+      }
+
+      const list = akuns.map((a, i) => `${i + 1}. ${a.name} (${fmt(a.balance)})`).join('\n')
+      await setSession(chatId, { ...newSession, akuns, step: 'pilih_dompet' })
+      await sendMessage(chatId, `💰 Pilih dompet:\n\n${list}`)
+      return Response.json({ ok: true })
+    }
+
+    // Step: pilih dompet
+    if (session.step === 'pilih_dompet') {
+      const idx = parseInt(text) - 1
+      if (isNaN(idx) || idx < 0 || idx >= session.akuns.length) {
+        await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nomor yang tersedia.')
+        return Response.json({ ok: true })
+      }
+
+      const akun = session.akuns[idx]
+
+      // Simpan transaksi
+      await supabase.from('transactions').insert({
+        user_id: userData.id,
+        type: session.type,
+        amount: session.amount,
+        account_id: akun.id,
+        category_id: session.category_id,
+        description: session.description,
+        date: session.date,
+        source: 'telegram',
+      })
+
+      // Update saldo
+      const newBalance = session.type === 'income'
+        ? akun.balance + session.amount
+        : akun.balance - session.amount
+      await supabase.from('accounts').update({ balance: newBalance }).eq('id', akun.id)
+
+      await clearSession(chatId)
+
+      const emoji = session.type === 'income' ? '📈' : '📉'
+      const sign = session.type === 'income' ? '+' : '-'
+      await sendMessage(chatId, `✅ <b>Transaksi tersimpan!</b>\n\n${emoji} ${sign}${fmt(session.amount)}\n📝 ${session.description}\n🏷️ ${session.category_name}\n💰 ${akun.name}\n📅 ${session.date}\n\nSisa saldo ${akun.name}: ${fmt(newBalance)}`)
+      return Response.json({ ok: true })
+    }
+  }
+
+  // ===== COMMAND BARU =====
+  const parts = text.split(/\s+/)
+  const command = parts[0].toLowerCase()
+
+  // OUT / IN
+  if (command === 'out' || command === 'in') {
+    const type = command === 'out' ? 'expense' : 'income'
+    const amount = parseFloat(parts[1])
+
+    if (!amount || isNaN(amount)) {
+      await sendMessage(chatId, `❌ Format: ${command} NOMINAL keterangan (tanggal opsional)\nContoh: ${command} 25000 bakso\nContoh: ${command} 25000 bakso 24/06/26`)
+      return Response.json({ ok: true })
+    }
+
+    // Cek apakah part terakhir adalah tanggal
+    const lastPart = parts[parts.length - 1]
+    const isDate = /^\d{2}\/\d{2}\/\d{2,4}$/.test(lastPart)
+    const date = isDate ? parseDate(lastPart) : new Date().toISOString().slice(0, 10)
+    const descParts = isDate ? parts.slice(2, -1) : parts.slice(2)
+    const description = descParts.join(' ') || (type === 'expense' ? 'Pengeluaran' : 'Pemasukan')
+
+    // Ambil kategori
+    const katType = type === 'expense' ? 'expense' : 'income'
+    const { data: kategori } = await supabase
+      .from('categories')
+      .select('*')
+      .eq('user_id', userData.id)
+      .eq('type', katType)
+
+    if (!kategori?.length) {
+      await sendMessage(chatId, `❌ Belum ada kategori ${type === 'expense' ? 'pengeluaran' : 'pemasukan'}. Tambah di Stopboncos dulu.`)
+      return Response.json({ ok: true })
+    }
+
+    // Simpan session
+    await setSession(chatId, {
+      step: 'pilih_kategori',
+      type,
+      amount,
+      description,
+      date,
+      kategori,
+    })
+
+    const list = kategori.map((k, i) => `${i + 1}. ${k.icon || ''} ${k.name}`).join('\n')
+    await sendMessage(chatId, `🏷️ Pilih kategori:\n\n${list}`)
     return Response.json({ ok: true })
   }
 
-  // Command /saldo
+  // /help
+  if (command === '/help' || command === 'help') {
+    await sendMessage(chatId, `🤖 <b>Stopboncos Bot</b>\n\nPerintah:\n\n📉 <b>Catat pengeluaran:</b>\nout 25000 bakso\nout 25000 bakso 24/06/26\n\n📈 <b>Catat pemasukan:</b>\nin 2000000 gaji\nin 2000000 gaji 01/06/26\n\n💰 <b>Cek saldo:</b>\n/saldo\n\n📋 <b>Laporan bulan ini:</b>\n/laporan\n\n🎯 <b>Status target:</b>\n/target\n\n❌ <b>Batal input:</b>\n/batal`)
+    return Response.json({ ok: true })
+  }
+
+  // /saldo
   if (command === '/saldo') {
     const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
     if (!akuns?.length) {
-      await sendMessage(chatId, '💰 Belum ada akun. Tambah akun di Stopboncos.')
+      await sendMessage(chatId, '💰 Belum ada dompet. Tambah dompet di Stopboncos.')
       return Response.json({ ok: true })
     }
     const total = akuns.reduce((s, a) => s + a.balance, 0)
     const list = akuns.map(a => `• ${a.name}: ${fmt(a.balance)}`).join('\n')
-    await sendMessage(chatId, `💰 <b>Saldo Akun</b>\n\n${list}\n\n<b>Total: ${fmt(total)}</b>`)
+    await sendMessage(chatId, `💰 <b>Saldo Dompet</b>\n\n${list}\n\n<b>Total: ${fmt(total)}</b>`)
     return Response.json({ ok: true })
   }
 
-  // Command /laporan
+  // /laporan
   if (command === '/laporan') {
     const now = new Date()
     const bulanStr = String(now.getMonth() + 1).padStart(2, '0')
     const tahun = now.getFullYear()
     const { data: txs } = await supabase.from('transactions')
-      .select('*')
-      .eq('user_id', userData.id)
+      .select('*').eq('user_id', userData.id)
       .gte('date', `${tahun}-${bulanStr}-01`)
       .lte('date', `${tahun}-${bulanStr}-31`)
-
     const masuk = txs?.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0) || 0
     const keluar = txs?.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0) || 0
     await sendMessage(chatId, `📋 <b>Laporan ${now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}</b>\n\n📈 Masuk: ${fmt(masuk)}\n📉 Keluar: ${fmt(keluar)}\n💰 Sisa: ${fmt(masuk - keluar)}`)
     return Response.json({ ok: true })
   }
 
-  // Command /target
+  // /target
   if (command === '/target') {
     const now = new Date()
     const bulanStr = String(now.getMonth() + 1).padStart(2, '0')
     const tahun = now.getFullYear()
     const { data: targets } = await supabase.from('targets')
-      .select('*, categories(name, icon)')
-      .eq('user_id', userData.id)
+      .select('*, categories(name, icon)').eq('user_id', userData.id)
     const { data: txs } = await supabase.from('transactions')
       .select('*').eq('user_id', userData.id).eq('type', 'expense')
       .gte('date', `${tahun}-${bulanStr}-01`).lte('date', `${tahun}-${bulanStr}-31`)
-
     if (!targets?.length) {
       await sendMessage(chatId, '🎯 Belum ada target. Buat target di Stopboncos.')
       return Response.json({ ok: true })
     }
-
     const list = targets.map(t => {
       const spent = txs?.filter(tx => tx.category_id === t.category_id).reduce((s, tx) => s + tx.amount, 0) || 0
       const pct = Math.round(spent / t.quota * 100)
       const status = pct >= 100 ? '🔴' : pct >= t.warning_pct ? '🟡' : '🟢'
       return `${status} ${t.categories?.icon || ''} ${t.categories?.name}: ${fmt(spent)} / ${fmt(t.quota)} (${pct}%)`
     }).join('\n')
-
     await sendMessage(chatId, `🎯 <b>Status Target Bulan Ini</b>\n\n${list}`)
     return Response.json({ ok: true })
   }
 
-  // Command /tx — catat pengeluaran
-  if (command === '/tx') {
-    const amount = parseFloat(parts[1])
-    const desc = parts.slice(2).join(' ')
-    if (!amount || isNaN(amount)) {
-      await sendMessage(chatId, '❌ Format: /tx NOMINAL keterangan\nContoh: /tx 25000 makan siang')
-      return Response.json({ ok: true })
-    }
-
-    const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
-    const akun = akuns?.[0]
-    if (!akun) {
-      await sendMessage(chatId, '❌ Belum ada akun. Tambah akun di Stopboncos dulu.')
-      return Response.json({ ok: true })
-    }
-
-    await supabase.from('transactions').insert({
-      user_id: userData.id,
-      type: 'expense',
-      amount,
-      account_id: akun.id,
-      description: desc || 'Via Telegram',
-      date: new Date().toISOString().slice(0, 10),
-      source: 'telegram',
-    })
-
-    await supabase.from('accounts').update({ balance: akun.balance - amount }).eq('id', akun.id)
-    await sendMessage(chatId, `✅ <b>Pengeluaran dicatat!</b>\n\n💸 ${fmt(amount)}\n📝 ${desc || 'Via Telegram'}\n🏦 ${akun.name}\n💰 Sisa saldo: ${fmt(akun.balance - amount)}`)
-    return Response.json({ ok: true })
-  }
-
-  // Command /in — catat pemasukan
-  if (command === '/in') {
-    const amount = parseFloat(parts[1])
-    const desc = parts.slice(2).join(' ')
-    if (!amount || isNaN(amount)) {
-      await sendMessage(chatId, '❌ Format: /in NOMINAL keterangan\nContoh: /in 2000000 gaji april')
-      return Response.json({ ok: true })
-    }
-
-    const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
-    const akun = akuns?.[0]
-    if (!akun) {
-      await sendMessage(chatId, '❌ Belum ada akun. Tambah akun di Stopboncos dulu.')
-      return Response.json({ ok: true })
-    }
-
-    await supabase.from('transactions').insert({
-      user_id: userData.id,
-      type: 'income',
-      amount,
-      account_id: akun.id,
-      description: desc || 'Via Telegram',
-      date: new Date().toISOString().slice(0, 10),
-      source: 'telegram',
-    })
-
-    await supabase.from('accounts').update({ balance: akun.balance + amount }).eq('id', akun.id)
-    await sendMessage(chatId, `✅ <b>Pemasukan dicatat!</b>\n\n📈 ${fmt(amount)}\n📝 ${desc || 'Via Telegram'}\n🏦 ${akun.name}\n💰 Saldo baru: ${fmt(akun.balance + amount)}`)
+  // /batal
+  if (command === '/batal') {
+    await clearSession(chatId)
+    await sendMessage(chatId, '❌ Input dibatalkan.')
     return Response.json({ ok: true })
   }
 
   // Default
-  await sendMessage(chatId, '❓ Perintah tidak dikenali. Ketik /help untuk melihat perintah yang tersedia.')
+  await sendMessage(chatId, '❓ Perintah tidak dikenali. Ketik /help untuk melihat perintah.')
   return Response.json({ ok: true })
 }

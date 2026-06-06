@@ -286,6 +286,7 @@ export default function DashboardPage() {
                 display: 'flex',
                 padding: '0 16px',
                 gap: GAP,
+                scrollSnapType: 'x mandatory',
               }}
             >
               {dailyData.map((day) => {
@@ -301,6 +302,7 @@ export default function DashboardPage() {
                       minWidth: BAR_WIDTH, width: BAR_WIDTH,
                       display: 'flex', flexDirection: 'column', alignItems: 'center',
                       flexShrink: 0, paddingBottom: '12px',
+                      scrollSnapAlign: 'start',
                     }}
                   >
                     {/* Area bar dengan label di puncak */}
