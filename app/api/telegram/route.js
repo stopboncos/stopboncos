@@ -7,11 +7,21 @@ const supabase = createClient(
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
-async function sendMessage(chatId, text) {
+async function sendMessage(chatId, text, keyboard = null) {
+  const payload = { chat_id: chatId, text, parse_mode: 'HTML' }
+  if (keyboard) payload.reply_markup = { inline_keyboard: keyboard }
   await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' })
+    body: JSON.stringify(payload)
+  })
+}
+
+async function answerCallback(callbackId) {
+  await fetch(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackId })
   })
 }
 
@@ -19,7 +29,6 @@ function fmt(n) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
 }
 
-// Parse tanggal dari format dd/mm/yy atau dd/mm/yyyy
 function parseDate(str) {
   if (!str) return new Date().toISOString().slice(0, 10)
   const parts = str.split('/')
@@ -29,7 +38,6 @@ function parseDate(str) {
   return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
 }
 
-// Ambil session
 async function getSession(chatId) {
   const { data } = await supabase
     .from('telegram_sessions')
@@ -39,7 +47,6 @@ async function getSession(chatId) {
   return data?.state || null
 }
 
-// Simpan session
 async function setSession(chatId, state) {
   await supabase.from('telegram_sessions').upsert({
     chat_id: String(chatId),
@@ -48,14 +55,91 @@ async function setSession(chatId, state) {
   })
 }
 
-// Hapus session
 async function clearSession(chatId) {
   await supabase.from('telegram_sessions').delete().eq('chat_id', String(chatId))
 }
 
 export async function POST(req) {
-  const body = await req.json()
+  let body
+  try {
+    body = await req.json()
+  } catch(e) {
+    return Response.json({ ok: true })
+  }
+
   const message = body?.message
+  const callbackQuery = body?.callback_query
+
+  // ===== HANDLE CALLBACK QUERY (inline keyboard) =====
+  if (callbackQuery) {
+    const chatId = callbackQuery.message.chat.id
+    const data = callbackQuery.data
+    const callbackId = callbackQuery.id
+
+    await answerCallback(callbackId)
+
+    const { data: userData } = await supabase
+      .from('users').select('*').eq('telegram_chat_id', String(chatId)).single()
+    if (!userData) return Response.json({ ok: true })
+
+    const session = await getSession(chatId)
+    if (!session) return Response.json({ ok: true })
+
+    // Pilih kategori
+    if (session.step === 'pilih_kategori' && data.startsWith('kat_')) {
+      const katId = data.replace('kat_', '')
+      const kat = session.kategori.find(k => k.id === katId)
+      if (!kat) return Response.json({ ok: true })
+
+      const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
+      if (!akuns?.length) {
+        await clearSession(chatId)
+        await sendMessage(chatId, '❌ Belum ada dompet. Tambah dompet di Stopboncos dulu.')
+        return Response.json({ ok: true })
+      }
+
+      await setSession(chatId, { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name, akuns })
+
+      const keyboard = akuns.map(a => ([{
+        text: `${a.name} (${fmt(a.balance)})`,
+        callback_data: `akun_${a.id}`
+      }]))
+      await sendMessage(chatId, '💰 Pilih dompet:', keyboard)
+      return Response.json({ ok: true })
+    }
+
+    // Pilih dompet
+    if (session.step === 'pilih_dompet' && data.startsWith('akun_')) {
+      const akunId = data.replace('akun_', '')
+      const akun = session.akuns.find(a => a.id === akunId)
+      if (!akun) return Response.json({ ok: true })
+
+      await supabase.from('transactions').insert({
+        user_id: userData.id,
+        type: session.type,
+        amount: session.amount,
+        account_id: akun.id,
+        category_id: session.category_id,
+        description: session.description,
+        date: session.date,
+        source: 'telegram',
+      })
+
+      const newBalance = session.type === 'income'
+        ? akun.balance + session.amount
+        : akun.balance - session.amount
+      await supabase.from('accounts').update({ balance: newBalance }).eq('id', akun.id)
+      await clearSession(chatId)
+
+      const emoji = session.type === 'income' ? '📈' : '📉'
+      const sign = session.type === 'income' ? '+' : '-'
+      await sendMessage(chatId, `✅ <b>Transaksi tersimpan!</b>\n\n${emoji} ${sign}${fmt(session.amount)}\n📝 ${session.description}\n🏷️ ${session.category_name}\n💰 ${akun.name}\n📅 ${session.date}\n\nSisa saldo ${akun.name}: ${fmt(newBalance)}`)
+      return Response.json({ ok: true })
+    }
+
+    return Response.json({ ok: true })
+  }
+
   if (!message) return Response.json({ ok: true })
 
   const chatId = message.chat.id
@@ -99,75 +183,6 @@ export async function POST(req) {
     return Response.json({ ok: true })
   }
 
-  // Cek session aktif (step by step input)
-  const session = await getSession(chatId)
-
-  // ===== HANDLE SESSION STATE =====
-  if (session) {
-    // Step: pilih kategori
-    if (session.step === 'pilih_kategori') {
-      const idx = parseInt(text) - 1
-      if (isNaN(idx) || idx < 0 || idx >= session.kategori.length) {
-        await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nomor yang tersedia.')
-        return Response.json({ ok: true })
-      }
-
-      const kat = session.kategori[idx]
-      const newSession = { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name }
-      await setSession(chatId, newSession)
-
-      // Ambil dompet
-      const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
-      if (!akuns?.length) {
-        await clearSession(chatId)
-        await sendMessage(chatId, '❌ Belum ada dompet. Tambah dompet di Stopboncos dulu.')
-        return Response.json({ ok: true })
-      }
-
-      const list = akuns.map((a, i) => `${i + 1}. ${a.name} (${fmt(a.balance)})`).join('\n')
-      await setSession(chatId, { ...newSession, akuns, step: 'pilih_dompet' })
-      await sendMessage(chatId, `💰 Pilih dompet:\n\n${list}`)
-      return Response.json({ ok: true })
-    }
-
-    // Step: pilih dompet
-    if (session.step === 'pilih_dompet') {
-      const idx = parseInt(text) - 1
-      if (isNaN(idx) || idx < 0 || idx >= session.akuns.length) {
-        await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nomor yang tersedia.')
-        return Response.json({ ok: true })
-      }
-
-      const akun = session.akuns[idx]
-
-      // Simpan transaksi
-      await supabase.from('transactions').insert({
-        user_id: userData.id,
-        type: session.type,
-        amount: session.amount,
-        account_id: akun.id,
-        category_id: session.category_id,
-        description: session.description,
-        date: session.date,
-        source: 'telegram',
-      })
-
-      // Update saldo
-      const newBalance = session.type === 'income'
-        ? akun.balance + session.amount
-        : akun.balance - session.amount
-      await supabase.from('accounts').update({ balance: newBalance }).eq('id', akun.id)
-
-      await clearSession(chatId)
-
-      const emoji = session.type === 'income' ? '📈' : '📉'
-      const sign = session.type === 'income' ? '+' : '-'
-      await sendMessage(chatId, `✅ <b>Transaksi tersimpan!</b>\n\n${emoji} ${sign}${fmt(session.amount)}\n📝 ${session.description}\n🏷️ ${session.category_name}\n💰 ${akun.name}\n📅 ${session.date}\n\nSisa saldo ${akun.name}: ${fmt(newBalance)}`)
-      return Response.json({ ok: true })
-    }
-  }
-
-  // ===== COMMAND BARU =====
   const parts = text.split(/\s+/)
   const command = parts[0].toLowerCase()
 
@@ -177,42 +192,32 @@ export async function POST(req) {
     const amount = parseFloat(parts[1])
 
     if (!amount || isNaN(amount)) {
-      await sendMessage(chatId, `❌ Format: ${command} NOMINAL keterangan (tanggal opsional)\nContoh: ${command} 25000 bakso\nContoh: ${command} 25000 bakso 24/06/26`)
+      await sendMessage(chatId, `❌ Format: ${command} NOMINAL keterangan\nContoh: ${command} 25000 bakso\nContoh: ${command} 25000 bakso 24/06/26`)
       return Response.json({ ok: true })
     }
 
-    // Cek apakah part terakhir adalah tanggal
     const lastPart = parts[parts.length - 1]
     const isDate = /^\d{2}\/\d{2}\/\d{2,4}$/.test(lastPart)
     const date = isDate ? parseDate(lastPart) : new Date().toISOString().slice(0, 10)
     const descParts = isDate ? parts.slice(2, -1) : parts.slice(2)
     const description = descParts.join(' ') || (type === 'expense' ? 'Pengeluaran' : 'Pemasukan')
 
-    // Ambil kategori
     const katType = type === 'expense' ? 'expense' : 'income'
     const { data: kategori } = await supabase
-      .from('categories')
-      .select('*')
-      .eq('user_id', userData.id)
-      .eq('type', katType)
+      .from('categories').select('*').eq('user_id', userData.id).eq('type', katType)
 
     if (!kategori?.length) {
-      await sendMessage(chatId, `❌ Belum ada kategori ${type === 'expense' ? 'pengeluaran' : 'pemasukan'}. Tambah di Stopboncos dulu.`)
+      await sendMessage(chatId, `❌ Belum ada kategori. Tambah di Stopboncos dulu.`)
       return Response.json({ ok: true })
     }
 
-    // Simpan session
-    await setSession(chatId, {
-      step: 'pilih_kategori',
-      type,
-      amount,
-      description,
-      date,
-      kategori,
-    })
+    await setSession(chatId, { step: 'pilih_kategori', type, amount, description, date, kategori })
 
-    const list = kategori.map((k, i) => `${i + 1}. ${k.icon || ''} ${k.name}`).join('\n')
-    await sendMessage(chatId, `🏷️ Pilih kategori:\n\n${list}`)
+    const keyboard = kategori.map(k => ([{
+      text: `${k.icon || ''} ${k.name}`,
+      callback_data: `kat_${k.id}`
+    }]))
+    await sendMessage(chatId, '🏷️ Pilih kategori:', keyboard)
     return Response.json({ ok: true })
   }
 
@@ -281,7 +286,6 @@ export async function POST(req) {
     return Response.json({ ok: true })
   }
 
-  // Default
   await sendMessage(chatId, '❓ Perintah tidak dikenali. Ketik /help untuk melihat perintah.')
   return Response.json({ ok: true })
 }
