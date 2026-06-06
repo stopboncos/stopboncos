@@ -7,23 +7,50 @@ import { useRouter, useSearchParams } from 'next/navigation'
 
 const PERIODE = ['Bulanan', 'Mingguan', 'Tahunan']
 
+const logActivity = async (userId, entityType, entityId, action, oldData, newData) => {
+  await supabase.from('activity_logs').insert({
+    user_id: userId, entity_type: entityType, entity_id: entityId,
+    action, old_data: oldData || null, new_data: newData || null,
+  })
+}
+
+const upsertTargetHistory = async (userId, categoryId, quota, period, warningPct, isDeleted = false) => {
+  const now = new Date()
+  await supabase.from('target_history').upsert({
+    user_id: userId, category_id: categoryId,
+    quota, period, warning_pct: warningPct,
+    bulan: now.getMonth() + 1, tahun: now.getFullYear(),
+    is_deleted: isDeleted, updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id,category_id,bulan,tahun' })
+}
+
 export default function TargetPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const detailId = searchParams.get('detail')
   const [isMobile, setIsMobile] = useState(false)
+  const [user, setUser] = useState(null)
 
+  // Target biasa
   const [targets, setTargets] = useState([])
   const [kategori, setKategori] = useState([])
   const [loading, setLoading] = useState(true)
 
-  // Modal tambah
+  // Target harian
+  const [dailyTarget, setDailyTarget] = useState(null)
+  const [showDailyModal, setShowDailyModal] = useState(false)
+  const [dailyForm, setDailyForm] = useState({ quota: '', warning_pct: 80 })
+  const [dailySaving, setDailySaving] = useState(false)
+  const [dailyError, setDailyError] = useState('')
+  const [isEditDaily, setIsEditDaily] = useState(false)
+
+  // Modal tambah target biasa
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ category_id: '', quota: '', period: 'Bulanan', warning_pct: 80, start_date: new Date().toISOString().slice(0, 7) })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  // Modal edit (mobile)
+  // Modal edit target biasa (mobile)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
   const [editForm, setEditForm] = useState({})
@@ -42,41 +69,108 @@ export default function TargetPage() {
   const fetchData = async () => {
     setLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
-    const [{ data: t }, { data: k }] = await Promise.all([
+    setUser(user)
+    const [{ data: t }, { data: k }, { data: dt }] = await Promise.all([
       supabase.from('targets').select('*, categories(name, icon, color)').eq('user_id', user.id).order('created_at', { ascending: false }),
-      supabase.from('categories').select('*').eq('user_id', user.id).eq('type', 'expense')
+      supabase.from('categories').select('*').eq('user_id', user.id).eq('type', 'expense'),
+      supabase.from('daily_target').select('*').eq('user_id', user.id).single(),
     ])
     setTargets(t || [])
     setKategori(k || [])
+    setDailyTarget(dt || null)
     setLoading(false)
   }
+
+  // ── TARGET HARIAN ────────────────────────────────────────────
+
+  const openDailyModal = (isEdit = false) => {
+    setIsEditDaily(isEdit)
+    setDailyError('')
+    if (isEdit && dailyTarget) {
+      setDailyForm({ quota: String(dailyTarget.quota), warning_pct: dailyTarget.warning_pct })
+    } else {
+      setDailyForm({ quota: '', warning_pct: 80 })
+    }
+    setShowDailyModal(true)
+  }
+
+  const handleDailySave = async () => {
+    if (!dailyForm.quota) { setDailyError('Kuota wajib diisi'); return }
+    setDailySaving(true)
+    setDailyError('')
+    const quota = parseFloat(dailyForm.quota)
+    const warning_pct = parseInt(dailyForm.warning_pct)
+
+    if (isEditDaily && dailyTarget) {
+      const { error } = await supabase.from('daily_target').update({
+        quota, warning_pct, updated_at: new Date().toISOString(),
+      }).eq('user_id', user.id)
+      if (error) { setDailyError(error.message); setDailySaving(false); return }
+      await logActivity(user.id, 'target', dailyTarget.id, 'update',
+        { type: 'harian', quota: dailyTarget.quota, warning_pct: dailyTarget.warning_pct },
+        { type: 'harian', quota, warning_pct }
+      )
+    } else {
+      const { data: inserted, error } = await supabase.from('daily_target').insert({
+        user_id: user.id, quota, warning_pct,
+      }).select().single()
+      if (error) { setDailyError(error.message); setDailySaving(false); return }
+      await logActivity(user.id, 'target', inserted.id, 'create', null,
+        { type: 'harian', quota, warning_pct }
+      )
+    }
+
+    setShowDailyModal(false)
+    fetchData()
+    setDailySaving(false)
+  }
+
+  const handleDailyDelete = async () => {
+    if (!confirm('Hapus target harian ini?')) return
+    await logActivity(user.id, 'target', dailyTarget.id, 'delete',
+      { type: 'harian', quota: dailyTarget.quota, warning_pct: dailyTarget.warning_pct }, null
+    )
+    await supabase.from('daily_target').delete().eq('user_id', user.id)
+    fetchData()
+  }
+
+  // ── TARGET BIASA ─────────────────────────────────────────────
 
   const handleSave = async () => {
     if (!form.category_id) { setError('Pilih kategori dulu'); return }
     if (!form.quota) { setError('Kuota wajib diisi'); return }
     setSaving(true)
     setError('')
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('targets').insert({
+    const { data: inserted, error } = await supabase.from('targets').insert({
       user_id: user.id,
       category_id: form.category_id,
       quota: parseFloat(form.quota),
       period: form.period,
       warning_pct: parseInt(form.warning_pct),
       start_date: form.start_date + '-01',
+    }).select().single()
+    if (error) { setError(error.message); setSaving(false); return }
+    await upsertTargetHistory(user.id, form.category_id, parseFloat(form.quota), form.period, parseInt(form.warning_pct))
+    await logActivity(user.id, 'target', inserted.id, 'create', null, {
+      category_id: form.category_id, quota: parseFloat(form.quota),
+      period: form.period, warning_pct: parseInt(form.warning_pct),
     })
-    if (error) setError(error.message)
-    else {
-      setShowModal(false)
-      setForm({ category_id: '', quota: '', period: 'Bulanan', warning_pct: 80, start_date: new Date().toISOString().slice(0, 7) })
-      fetchData()
-    }
+    setShowModal(false)
+    setForm({ category_id: '', quota: '', period: 'Bulanan', warning_pct: 80, start_date: new Date().toISOString().slice(0, 7) })
+    fetchData()
     setSaving(false)
   }
 
   const handleDelete = async (id, e) => {
     e?.stopPropagation()
     if (!confirm('Hapus target ini?')) return
+    const target = targets.find(t => t.id === id)
+    if (target) {
+      await upsertTargetHistory(user.id, target.category_id, target.quota, target.period, target.warning_pct, true)
+      await logActivity(user.id, 'target', id, 'delete', {
+        category_id: target.category_id, quota: target.quota, period: target.period, warning_pct: target.warning_pct,
+      }, null)
+    }
     await supabase.from('targets').delete().eq('id', id)
     fetchData()
   }
@@ -106,11 +200,14 @@ export default function TargetPage() {
       warning_pct: parseInt(editForm.warning_pct),
       start_date: editForm.start_date + '-01',
     }).eq('id', editTarget.id)
-    if (error) setEditError(error.message)
-    else {
-      setShowEditModal(false)
-      fetchData()
-    }
+    if (error) { setEditError(error.message); setEditSaving(false); return }
+    await upsertTargetHistory(user.id, editForm.category_id, parseFloat(editForm.quota), editForm.period, parseInt(editForm.warning_pct))
+    await logActivity(user.id, 'target', editTarget.id, 'update',
+      { category_id: editTarget.category_id, quota: editTarget.quota, period: editTarget.period, warning_pct: editTarget.warning_pct },
+      { category_id: editForm.category_id, quota: parseFloat(editForm.quota), period: editForm.period, warning_pct: parseInt(editForm.warning_pct) }
+    )
+    setShowEditModal(false)
+    fetchData()
     setEditSaving(false)
   }
 
@@ -122,34 +219,41 @@ export default function TargetPage() {
     color: 'var(--text)', boxSizing: 'border-box',
   }
 
-  const modalForm = (formData, setFormData) => (
+  const modalForm = (formData, setFormData, isDaily = false) => (
     <>
-      {/* Kategori */}
+      {/* Kategori — disabled untuk harian */}
       <div style={{ marginBottom: '14px' }}>
-        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kategori *</label>
-        <select value={formData.category_id} onChange={e => setFormData({ ...formData, category_id: e.target.value })} style={inputStyle}>
-          <option value="">Pilih kategori...</option>
-          {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
+          Kategori {isDaily && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>(target harian berlaku untuk semua kategori)</span>}
+        </label>
+        <select value="" disabled={isDaily} style={{ ...inputStyle, opacity: isDaily ? 0.5 : 1, cursor: isDaily ? 'not-allowed' : 'default' }}>
+          <option value="">Semua kategori pengeluaran</option>
+          {!isDaily && kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
         </select>
       </div>
+
       {/* Kuota */}
       <div style={{ marginBottom: '14px' }}>
         <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kuota Maksimal (Rp) *</label>
         <input type="number" value={formData.quota} onChange={e => setFormData({ ...formData, quota: e.target.value })} placeholder="0" style={inputStyle} />
       </div>
-      {/* Periode & Mulai */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
-        <div>
-          <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Periode</label>
-          <select value={formData.period} onChange={e => setFormData({ ...formData, period: e.target.value })} style={inputStyle}>
-            {PERIODE.map(p => <option key={p}>{p}</option>)}
-          </select>
+
+      {/* Periode */}
+      {!isDaily && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+          <div>
+            <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Periode</label>
+            <select value={formData.period} onChange={e => setFormData({ ...formData, period: e.target.value })} style={inputStyle}>
+              {PERIODE.map(p => <option key={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Mulai</label>
+            <input type="month" value={formData.start_date} onChange={e => setFormData({ ...formData, start_date: e.target.value })} style={inputStyle} />
+          </div>
         </div>
-        <div>
-          <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Mulai</label>
-          <input type="month" value={formData.start_date} onChange={e => setFormData({ ...formData, start_date: e.target.value })} style={inputStyle} />
-        </div>
-      </div>
+      )}
+
       {/* Warning */}
       <div style={{ marginBottom: '20px' }}>
         <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
@@ -160,6 +264,12 @@ export default function TargetPage() {
           style={{ width: '100%' }} />
       </div>
     </>
+  )
+
+  const sectionLabel = (text) => (
+    <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '12px', marginTop: '4px' }}>
+      {text}
+    </div>
   )
 
   return (
@@ -176,82 +286,159 @@ export default function TargetPage() {
         }}>+ Tambah Target</button>
       </div>
 
-      {/* List */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>Memuat...</div>
-      ) : targets.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '64px', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border)' }}>
-          <div style={{ fontSize: '40px', marginBottom: '12px' }}>🎯</div>
-          <div style={{ fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}>Belum ada target</div>
-          <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Buat target pengeluaran per kategori</div>
-        </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {targets.map(target => (
-            <div
-              key={target.id}
-              onClick={() => !isMobile && router.push(detailId === target.id ? '?' : `?detail=${target.id}`)}
-              style={{
-                background: detailId === target.id ? 'var(--primary-light)' : 'var(--bg-card)',
-                border: detailId === target.id ? '1.5px solid var(--primary)' : '1px solid var(--border)',
-                borderRadius: '12px', padding: '20px',
-                cursor: isMobile ? 'default' : 'pointer',
-                transition: 'background 0.15s',
-              }}
-            >
+        <>
+          {/* ── SECTION HARIAN ── */}
+          {sectionLabel('Target Harian')}
+          {dailyTarget ? (
+            <div style={{
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: '12px', padding: '20px', marginBottom: '24px',
+            }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div style={{
-                    width: '42px', height: '42px', borderRadius: '10px', flexShrink: 0,
-                    background: (target.categories?.color || '#5B5F97') + '22',
+                    width: '42px', height: '42px', borderRadius: '10px',
+                    background: 'var(--primary-light)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px'
-                  }}>{target.categories?.icon || '🎯'}</div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>{target.categories?.name || 'Kategori'}</div>
+                  }}>📅</div>
+                  <div>
+                    <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>Target Harian</div>
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {target.period} · Kuota {fmt(target.quota)}
-                    </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '1px' }}>
-                      Peringatan di {target.warning_pct}%
+                      Kuota {fmt(dailyTarget.quota)} · Peringatan di {dailyTarget.warning_pct}%
                     </div>
                   </div>
                 </div>
-                {/* Tombol edit & hapus — mobile only */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                  <button
-                    className="action-btn-mobile"
-                    onClick={(e) => openEditModal(target, e)}
-                    style={{
-                      background: 'var(--primary-light)', color: 'var(--primary)',
-                      border: 'none', borderRadius: '6px', padding: '5px 7px',
-                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
-                    }}>✏️</button>
-                  <button
-                    className="action-btn-mobile"
-                    onClick={(e) => handleDelete(target.id, e)}
-                    style={{
-                      background: 'var(--danger-light)', color: 'var(--danger)',
-                      border: 'none', borderRadius: '6px', padding: '5px 7px',
-                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
-                    }}>🗑️</button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={() => openDailyModal(true)} style={{
+                    background: 'var(--primary-light)', color: 'var(--primary)',
+                    border: 'none', borderRadius: '6px', padding: '5px 10px',
+                    cursor: 'pointer', fontSize: '12px', fontWeight: '500'
+                  }}>✏️ Edit</button>
+                  <button onClick={handleDailyDelete} style={{
+                    background: 'var(--danger-light)', color: 'var(--danger)',
+                    border: 'none', borderRadius: '6px', padding: '5px 10px',
+                    cursor: 'pointer', fontSize: '12px', fontWeight: '500'
+                  }}>🗑️ Hapus</button>
                 </div>
               </div>
             </div>
-          ))}
+          ) : (
+            <div style={{
+              textAlign: 'center', padding: '32px',
+              background: 'var(--bg-card)', borderRadius: '12px',
+              border: '1px dashed var(--border)', marginBottom: '24px',
+            }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>📅</div>
+              <div style={{ fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}>Belum ada target harian</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '14px' }}>Set batas pengeluaran harian untuk semua kategori</div>
+              <button onClick={() => openDailyModal(false)} style={{
+                padding: '8px 18px', background: 'var(--primary)', color: 'white',
+                border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer'
+              }}>+ Set Target Harian</button>
+            </div>
+          )}
+
+          {/* ── SECTION TARGET BIASA ── */}
+          {sectionLabel('Target Per Kategori')}
+          {targets.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '48px', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>🎯</div>
+              <div style={{ fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}>Belum ada target</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Buat target pengeluaran per kategori</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {targets.map(target => (
+                <div
+                  key={target.id}
+                  onClick={() => !isMobile && router.push(detailId === target.id ? '?' : `?detail=${target.id}`)}
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: detailId === target.id ? '1.5px solid var(--primary)' : '1px solid var(--border)',
+                    borderRadius: '12px', padding: '20px',
+                    cursor: isMobile ? 'default' : 'pointer',
+                    transition: 'background 0.15s',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                      <div style={{
+                        width: '42px', height: '42px', borderRadius: '10px', flexShrink: 0,
+                        background: (target.categories?.color || '#5B5F97') + '22',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px'
+                      }}>{target.categories?.icon || '🎯'}</div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>{target.categories?.name || 'Kategori'}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          {target.period} · Kuota {fmt(target.quota)}
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '1px' }}>
+                          Peringatan di {target.warning_pct}%
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <button className="action-btn-mobile" onClick={(e) => openEditModal(target, e)} style={{
+                        background: 'var(--primary-light)', color: 'var(--primary)',
+                        border: 'none', borderRadius: '6px', padding: '5px 7px',
+                        cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                      }}>✏️</button>
+                      <button className="action-btn-mobile" onClick={(e) => handleDelete(target.id, e)} style={{
+                        background: 'var(--danger-light)', color: 'var(--danger)',
+                        border: 'none', borderRadius: '6px', padding: '5px 7px',
+                        cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                      }}>🗑️</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* MODAL TARGET HARIAN */}
+      {showDailyModal && (
+        <div onClick={() => setShowDailyModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-card)', borderRadius: '12px', width: '440px', maxWidth: '95vw', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>{isEditDaily ? 'Edit' : 'Set'} Target Harian</h2>
+              <button onClick={() => setShowDailyModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
+            </div>
+            {dailyError && <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>{dailyError}</div>}
+
+            {/* Kuota */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
+                Kuota Maksimal per Hari (Rp) *
+              </label>
+              <input type="number" value={dailyForm.quota} onChange={e => setDailyForm({ ...dailyForm, quota: e.target.value })} placeholder="0" style={inputStyle} />
+            </div>
+            {/* Warning */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
+                Peringatan di (%) — sekarang: {dailyForm.warning_pct}%
+              </label>
+              <input type="range" min="50" max="95" step="5" value={dailyForm.warning_pct}
+                onChange={e => setDailyForm({ ...dailyForm, warning_pct: e.target.value })}
+                style={{ width: '100%' }} />
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowDailyModal(false)} style={{ padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer' }}>Batal</button>
+              <button onClick={handleDailySave} disabled={dailySaving} style={{ padding: '9px 18px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', cursor: dailySaving ? 'not-allowed' : 'pointer', opacity: dailySaving ? 0.7 : 1 }}>{dailySaving ? 'Menyimpan...' : 'Simpan'}</button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* MODAL TAMBAH */}
+      {/* MODAL TAMBAH TARGET BIASA */}
       {showModal && (
-        <div onClick={() => setShowModal(false)} style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200
-        }}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--bg-card)', borderRadius: '12px',
-            width: '440px', maxWidth: '95vw', padding: '24px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
-          }}>
+        <div onClick={() => setShowModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-card)', borderRadius: '12px', width: '440px', maxWidth: '95vw', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
               <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>Tambah Target</h2>
               <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
@@ -262,49 +449,88 @@ export default function TargetPage() {
                 ⚠ Belum ada kategori pengeluaran. Buat kategori dulu.
               </div>
             )}
-            {modalForm(form, setForm)}
+            {/* Kategori */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kategori *</label>
+              <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })} style={inputStyle}>
+                <option value="">Pilih kategori...</option>
+                {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+              </select>
+            </div>
+            {/* Kuota */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kuota Maksimal (Rp) *</label>
+              <input type="number" value={form.quota} onChange={e => setForm({ ...form, quota: e.target.value })} placeholder="0" style={inputStyle} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+              <div>
+                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Periode</label>
+                <select value={form.period} onChange={e => setForm({ ...form, period: e.target.value })} style={inputStyle}>
+                  {PERIODE.map(p => <option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Mulai</label>
+                <input type="month" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
+                Peringatan di (%) — sekarang: {form.warning_pct}%
+              </label>
+              <input type="range" min="50" max="95" step="5" value={form.warning_pct}
+                onChange={e => setForm({ ...form, warning_pct: e.target.value })} style={{ width: '100%' }} />
+            </div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowModal(false)} style={{
-                padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)',
-                border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer'
-              }}>Batal</button>
-              <button onClick={handleSave} disabled={saving} style={{
-                padding: '9px 18px', background: 'var(--primary)', color: 'white',
-                border: 'none', borderRadius: '8px', fontSize: '13.5px',
-                fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1
-              }}>{saving ? 'Menyimpan...' : 'Simpan Target'}</button>
+              <button onClick={() => setShowModal(false)} style={{ padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer' }}>Batal</button>
+              <button onClick={handleSave} disabled={saving} style={{ padding: '9px 18px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>{saving ? 'Menyimpan...' : 'Simpan Target'}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL EDIT (mobile) */}
+      {/* MODAL EDIT TARGET BIASA (mobile) */}
       {showEditModal && (
-        <div onClick={() => setShowEditModal(false)} style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200
-        }}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--bg-card)', borderRadius: '12px',
-            width: '440px', maxWidth: '95vw', padding: '24px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
-          }}>
+        <div onClick={() => setShowEditModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-card)', borderRadius: '12px', width: '440px', maxWidth: '95vw', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
               <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: 'var(--text)' }}>Edit Target</h2>
               <button onClick={() => setShowEditModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
             </div>
             {editError && <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>{editError}</div>}
-            {modalForm(editForm, setEditForm)}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kategori *</label>
+              <select value={editForm.category_id} onChange={e => setEditForm({ ...editForm, category_id: e.target.value })} style={inputStyle}>
+                <option value="">Pilih kategori...</option>
+                {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Kuota Maksimal (Rp) *</label>
+              <input type="number" value={editForm.quota} onChange={e => setEditForm({ ...editForm, quota: e.target.value })} placeholder="0" style={inputStyle} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+              <div>
+                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Periode</label>
+                <select value={editForm.period} onChange={e => setEditForm({ ...editForm, period: e.target.value })} style={inputStyle}>
+                  {PERIODE.map(p => <option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Mulai</label>
+                <input type="month" value={editForm.start_date} onChange={e => setEditForm({ ...editForm, start_date: e.target.value })} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>
+                Peringatan di (%) — sekarang: {editForm.warning_pct}%
+              </label>
+              <input type="range" min="50" max="95" step="5" value={editForm.warning_pct}
+                onChange={e => setEditForm({ ...editForm, warning_pct: e.target.value })} style={{ width: '100%' }} />
+            </div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowEditModal(false)} style={{
-                padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)',
-                border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer'
-              }}>Batal</button>
-              <button onClick={handleEditSave} disabled={editSaving} style={{
-                padding: '9px 18px', background: 'var(--primary)', color: 'white',
-                border: 'none', borderRadius: '8px', fontSize: '13.5px',
-                fontWeight: '600', cursor: editSaving ? 'not-allowed' : 'pointer', opacity: editSaving ? 0.7 : 1
-              }}>{editSaving ? 'Menyimpan...' : 'Simpan'}</button>
+              <button onClick={() => setShowEditModal(false)} style={{ padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer' }}>Batal</button>
+              <button onClick={handleEditSave} disabled={editSaving} style={{ padding: '9px 18px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', cursor: editSaving ? 'not-allowed' : 'pointer', opacity: editSaving ? 0.7 : 1 }}>{editSaving ? 'Menyimpan...' : 'Simpan'}</button>
             </div>
           </div>
         </div>

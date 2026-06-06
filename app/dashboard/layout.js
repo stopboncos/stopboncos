@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
+import { IconPicker, findGroupForIcon } from '@/components/IconPicker'
 
 const menuItems = [
   { href: '/dashboard', label: 'Dashboard', icon: '📊' },
@@ -18,6 +19,7 @@ const konfiguasiItems = [
   { href: '/dashboard/kategori', label: 'Kategori' },
   { href: '/dashboard/target', label: 'Target' },
   { href: '/dashboard/backup', label: 'Backup & Restore' },
+  { href: '/dashboard/log', label: 'Log Aktivitas' },
 ]
 
 const detailPages = [
@@ -30,10 +32,10 @@ const detailPages = [
 
 const defaultDetailText = {
   '/dashboard/transaksi': { icon: '💸', text: 'Pilih transaksi untuk melihat detail' },
-  '/dashboard/target':    { icon: '🎯', text: 'Pilih target untuk melihat detail' },
-  '/dashboard/laporan':   { icon: '📋', text: 'Pilih laporan untuk melihat detail' },
-  '/dashboard/akun':      { icon: '👛', text: 'Pilih akun untuk melihat detail' },
-  '/dashboard/kategori':  { icon: '🏷️', text: 'Pilih kategori untuk melihat detail' },
+  '/dashboard/target': { icon: '🎯', text: 'Pilih target untuk melihat detail' },
+  '/dashboard/laporan': { icon: '📋', text: 'Pilih laporan untuk melihat detail' },
+  '/dashboard/akun': { icon: '👛', text: 'Pilih akun untuk melihat detail' },
+  '/dashboard/kategori': { icon: '🏷️', text: 'Pilih kategori untuk melihat detail' },
 }
 
 function DetailPanel({ pathname, detailId }) {
@@ -51,6 +53,23 @@ function DetailPanel({ pathname, detailId }) {
   return <DetailContent basePath={basePath} detailId={detailId} />
 }
 
+const logActivity = async (userId, entityType, entityId, action, oldData, newData) => {
+  await supabase.from('activity_logs').insert({
+    user_id: userId, entity_type: entityType, entity_id: entityId,
+    action, old_data: oldData || null, new_data: newData || null,
+  })
+}
+
+const upsertTargetHistory = async (userId, categoryId, quota, period, warningPct, isDeleted = false) => {
+  const now = new Date()
+  await supabase.from('target_history').upsert({
+    user_id: userId, category_id: categoryId,
+    quota, period, warning_pct: warningPct,
+    bulan: now.getMonth() + 1, tahun: now.getFullYear(),
+    is_deleted: isDeleted, updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id,category_id,bulan,tahun' })
+}
+
 function DetailContent({ basePath, detailId }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -61,6 +80,8 @@ function DetailContent({ basePath, detailId }) {
   const [akuns, setAkuns] = useState([])
   const [kategori, setKategori] = useState([])
   const [form, setForm] = useState({})
+  const [openGroup, setOpenGroup] = useState(0)
+  const [txCount, setTxCount] = useState(0)
 
   const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
 
@@ -78,7 +99,7 @@ function DetailContent({ basePath, detailId }) {
 
     if (basePath === '/dashboard/transaksi' || basePath === '/dashboard/laporan') {
       const { data: tx } = await supabase.from('transactions')
-        .select('*, accounts(name), categories(name, icon, color)')
+        .select('*, accounts!transactions_account_id_fkey(name), account_to:accounts!transactions_account_to_id_fkey(name), categories(name, icon, color)')
         .eq('id', detailId).single()
       result = tx
       const [{ data: a }, { data: k }] = await Promise.all([
@@ -91,6 +112,7 @@ function DetailContent({ basePath, detailId }) {
         type: tx.type,
         amount: String(tx.amount),
         account_id: tx.account_id || '',
+        account_to_id: tx.account_to_id || '',  // ← tambah ini
         category_id: tx.category_id || '',
         description: tx.description || '',
         date: tx.date,
@@ -99,10 +121,22 @@ function DetailContent({ basePath, detailId }) {
       const { data: ak } = await supabase.from('accounts').select('*').eq('id', detailId).single()
       result = ak
       if (ak) setForm({ name: ak.name, balance: String(ak.balance) })
+      const { count: ac } = await supabase
+        .from('transactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('account_id', detailId)
+      setTxCount(ac || 0)
     } else if (basePath === '/dashboard/kategori') {
       const { data: kat } = await supabase.from('categories').select('*').eq('id', detailId).single()
       result = kat
       if (kat) setForm({ name: kat.name, type: kat.type, icon: kat.icon || '', color: kat.color || '' })
+      setOpenGroup(findGroupForIcon(kat.icon || '🍽️'))  // ← tambah ini
+      const { count: kc } = await supabase
+        .from('transactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('category_id', detailId)
+      setTxCount(kc || 0)
+      setOpenGroup(findGroupForIcon(kat.icon || '🍽️'))
     } else if (basePath === '/dashboard/target') {
       const { data: tgt } = await supabase.from('targets')
         .select('*, categories(name, icon, color)')
@@ -126,33 +160,73 @@ function DetailContent({ basePath, detailId }) {
   const handleSave = async () => {
     setSaving(true)
     if (basePath === '/dashboard/transaksi' || basePath === '/dashboard/laporan') {
+      // Revert balance asal lama
       const { data: akunLama } = await supabase.from('accounts').select('*').eq('id', data.account_id).single()
       if (akunLama) {
-        const reverted = data.type === 'income' ? akunLama.balance - data.amount : akunLama.balance + data.amount
+        let reverted = akunLama.balance
+        if (data.type === 'income') reverted -= data.amount
+        else if (data.type === 'expense') reverted += data.amount
+        else if (data.type === 'transfer') reverted += data.amount
         await supabase.from('accounts').update({ balance: reverted }).eq('id', akunLama.id)
       }
+      // Revert balance tujuan lama (kalau transfer)
+      if (data.type === 'transfer' && data.account_to_id) {
+        const { data: akunTujuanLama } = await supabase.from('accounts').select('*').eq('id', data.account_to_id).single()
+        if (akunTujuanLama) {
+          await supabase.from('accounts').update({ balance: akunTujuanLama.balance - data.amount }).eq('id', akunTujuanLama.id)
+        }
+      }
+      // Update transaksi
       await supabase.from('transactions').update({
         type: form.type, amount: parseFloat(form.amount),
-        account_id: form.account_id, category_id: form.category_id || null,
+        account_id: form.account_id,
+        account_to_id: form.type === 'transfer' ? form.account_to_id : null,
+        category_id: form.type === 'transfer' ? null : (form.category_id || null),
         description: form.description, date: form.date,
       }).eq('id', detailId)
-      const { data: akunBaru } = await supabase.from('accounts').select('*').eq('id', form.account_id).single()
+      // Apply balance baru — refresh dulu setelah revert
+      const { data: freshAkuns } = await supabase.from('accounts').select('*')
+      const fa = freshAkuns || []
+      const akunBaru = fa.find(a => a.id === form.account_id)
       if (akunBaru) {
-        const newBal = form.type === 'income' ? akunBaru.balance + parseFloat(form.amount) : akunBaru.balance - parseFloat(form.amount)
+        let newBal = akunBaru.balance
+        if (form.type === 'income') newBal += parseFloat(form.amount)
+        else if (form.type === 'expense') newBal -= parseFloat(form.amount)
+        else if (form.type === 'transfer') newBal -= parseFloat(form.amount)
         await supabase.from('accounts').update({ balance: newBal }).eq('id', akunBaru.id)
       }
+      if (form.type === 'transfer' && form.account_to_id) {
+        const akunTujuanBaru = fa.find(a => a.id === form.account_to_id)
+        if (akunTujuanBaru) {
+          await supabase.from('accounts').update({ balance: akunTujuanBaru.balance + parseFloat(form.amount) }).eq('id', akunTujuanBaru.id)
+        }
+      }
     } else if (basePath === '/dashboard/akun') {
+      const { data: { user } } = await supabase.auth.getUser()
       await supabase.from('accounts').update({ name: form.name }).eq('id', detailId)
+      await logActivity(user.id, 'akun', detailId, 'update',
+        { name: data.name },
+        { name: form.name }
+      )
     } else if (basePath === '/dashboard/kategori') {
+      const { data: { user } } = await supabase.auth.getUser()
       await supabase.from('categories').update({ name: form.name, type: form.type, icon: form.icon, color: form.color }).eq('id', detailId)
+      await logActivity(user.id, 'kategori', detailId, 'update',
+        { name: data.name, type: data.type, icon: data.icon, color: data.color },
+        { name: form.name, type: form.type, icon: form.icon, color: form.color }
+      )
     } else if (basePath === '/dashboard/target') {
+      const { data: { user } } = await supabase.auth.getUser()
       await supabase.from('targets').update({
-        category_id: form.category_id,
-        quota: parseFloat(form.quota),
-        period: form.period,
-        warning_pct: parseInt(form.warning_pct),
+        category_id: form.category_id, quota: parseFloat(form.quota),
+        period: form.period, warning_pct: parseInt(form.warning_pct),
         start_date: form.start_date + '-01',
       }).eq('id', detailId)
+      await upsertTargetHistory(user.id, form.category_id, parseFloat(form.quota), form.period, parseInt(form.warning_pct))
+      await logActivity(user.id, 'target', detailId, 'update',
+        { category_id: data.category_id, quota: data.quota, period: data.period, warning_pct: data.warning_pct },
+        { category_id: form.category_id, quota: parseFloat(form.quota), period: form.period, warning_pct: parseInt(form.warning_pct) }
+      )
     }
     setSaving(false)
     setEditMode(false)
@@ -160,21 +234,57 @@ function DetailContent({ basePath, detailId }) {
   }
 
   const handleDelete = async () => {
-    if (!confirm('Hapus data ini?')) return
+    const { data: { user } } = await supabase.auth.getUser()
+
     if (basePath === '/dashboard/transaksi' || basePath === '/dashboard/laporan') {
+      if (!confirm('Hapus data ini?')) return
       const { data: akun } = await supabase.from('accounts').select('*').eq('id', data.account_id).single()
       if (akun) {
-        const reverted = data.type === 'income' ? akun.balance - data.amount : akun.balance + data.amount
+        let reverted = akun.balance
+        if (data.type === 'income') reverted -= data.amount
+        else if (data.type === 'expense') reverted += data.amount
+        else if (data.type === 'transfer') reverted += data.amount
         await supabase.from('accounts').update({ balance: reverted }).eq('id', akun.id)
       }
+      if (data.type === 'transfer' && data.account_to_id) {
+        const { data: akunTujuan } = await supabase.from('accounts').select('*').eq('id', data.account_to_id).single()
+        if (akunTujuan) {
+          await supabase.from('accounts').update({ balance: akunTujuan.balance - data.amount }).eq('id', akunTujuan.id)
+        }
+      }
       await supabase.from('transactions').delete().eq('id', detailId)
+
     } else if (basePath === '/dashboard/akun') {
+      if (txCount > 0) {
+        alert(`Tidak bisa dihapus — akun ini masih digunakan di ${txCount} transaksi.`)
+        return
+      }
+      if (!confirm('Hapus akun ini?')) return
+      await logActivity(user.id, 'akun', detailId, 'delete', {
+        name: data.name, type: data.type, balance: data.balance, color: data.color, notes: data.notes,
+      }, null)
       await supabase.from('accounts').delete().eq('id', detailId)
+
     } else if (basePath === '/dashboard/kategori') {
+      if (txCount > 0) {
+        alert(`Tidak bisa dihapus — kategori ini masih digunakan di ${txCount} transaksi.`)
+        return
+      }
+      if (!confirm('Hapus kategori ini?')) return
+      await logActivity(user.id, 'kategori', detailId, 'delete', {
+        name: data.name, type: data.type, icon: data.icon, color: data.color,
+      }, null)
       await supabase.from('categories').delete().eq('id', detailId)
+
     } else if (basePath === '/dashboard/target') {
+      if (!confirm('Hapus target ini?')) return
+      await upsertTargetHistory(user.id, data.category_id, data.quota, data.period, data.warning_pct, true)
+      await logActivity(user.id, 'target', detailId, 'delete', {
+        category_id: data.category_id, quota: data.quota, period: data.period, warning_pct: data.warning_pct,
+      }, null)
       await supabase.from('targets').delete().eq('id', detailId)
     }
+
     router.push(pathname)
   }
 
@@ -250,13 +360,15 @@ function DetailContent({ basePath, detailId }) {
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Tipe</div>
             <div style={{ display: 'flex', gap: '6px' }}>
-              {[{ key: 'expense', label: '📉 Pengeluaran' }, { key: 'income', label: '📈 Pemasukan' }].map(t => (
+              {[{ key: 'expense', label: '📉 Pengeluaran' }, { key: 'income', label: '📈 Pemasukan' }, { key: 'transfer', label: '🔄 Transfer' }].map(t => (
                 <button key={t.key} onClick={() => setForm({ ...form, type: t.key, category_id: '' })} style={{
                   flex: 1, padding: '7px', border: '1px solid', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
                   borderColor: form.type === t.key ? 'var(--primary)' : 'var(--border)',
                   background: form.type === t.key ? 'var(--primary-light)' : 'transparent',
                   color: form.type === t.key ? 'var(--primary)' : 'var(--text-muted)',
-                }}>{t.label}</button>
+                }}
+                  disabled={data.type === 'transfer' && t.key !== 'transfer'}
+                >{t.label}</button>
               ))}
             </div>
           </div>
@@ -269,15 +381,27 @@ function DetailContent({ basePath, detailId }) {
             </select>
           </div>
         ) : row('Akun', data.accounts?.name || '—')}
-        {editMode ? (
+        {form.type === 'transfer' && editMode && (
           <div style={{ marginBottom: '4px' }}>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Kategori</div>
-            <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })} style={inputStyle}>
-              <option value="">Pilih kategori...</option>
-              {filteredKat.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Dompet Tujuan</div>
+            <select value={form.account_to_id} onChange={e => setForm({ ...form, account_to_id: e.target.value })} style={inputStyle}>
+              <option value="">Pilih dompet tujuan...</option>
+              {akuns.filter(a => a.id !== form.account_id).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
-        ) : row('Kategori', data.categories ? `${data.categories.icon} ${data.categories.name}` : '—')}
+        )}
+        {form.type !== 'transfer' && (
+          editMode ? (
+            <div style={{ marginBottom: '4px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Kategori</div>
+              <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })} style={inputStyle}>
+                <option value="">Pilih kategori...</option>
+                {filteredKat.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
+              </select>
+            </div>
+          ) : row('Kategori', data.categories ? `${data.categories.icon} ${data.categories.name}` : '—')
+        )}
+        {data.type === 'transfer' && !editMode && row('Dompet Tujuan', data.account_to?.name || '—')}
         {editMode ? (
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', marginTop: '12px' }}>Tanggal</div>
@@ -327,16 +451,42 @@ function DetailContent({ basePath, detailId }) {
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Tipe</div>
             <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
               {[{ key: 'expense', label: '📉 Pengeluaran' }, { key: 'income', label: '📈 Pemasukan' }].map(t => (
-                <button key={t.key} onClick={() => setForm({ ...form, type: t.key })} style={{
-                  flex: 1, padding: '7px', border: '1px solid', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
-                  borderColor: form.type === t.key ? 'var(--primary)' : 'var(--border)',
-                  background: form.type === t.key ? 'var(--primary-light)' : 'transparent',
-                  color: form.type === t.key ? 'var(--primary)' : 'var(--text-muted)',
-                }}>{t.label}</button>
+                <button key={t.key}
+                  onClick={() => txCount === 0 && setForm({ ...form, type: t.key })}
+                  style={{
+                    flex: 1, padding: '7px', border: '1px solid', fontSize: '12px', borderRadius: '8px',
+                    cursor: txCount > 0 ? 'not-allowed' : 'pointer',
+                    borderColor: form.type === t.key ? 'var(--primary)' : 'var(--border)',
+                    background: form.type === t.key ? 'var(--primary-light)' : 'transparent',
+                    color: form.type === t.key ? 'var(--primary)' : 'var(--text-muted)',
+                    opacity: txCount > 0 && form.type !== t.key ? 0.4 : 1,
+                  }}
+                >{t.label}</button>
               ))}
             </div>
+            {txCount > 0 && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                ⚠ Tipe tidak bisa diubah — kategori ini digunakan di {txCount} transaksi
+              </div>
+            )}
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Icon</div>
-            <input value={form.icon} onChange={e => setForm({ ...form, icon: e.target.value })} placeholder="Emoji icon..." style={{ ...inputStyle, marginBottom: '12px' }} />
+            <div style={{ marginBottom: '12px' }}>
+              <IconPicker
+                selectedIcon={form.icon}
+                onSelect={(icon) => setForm({ ...form, icon })}
+                openGroup={openGroup}
+                onToggleGroup={(gIdx) => setOpenGroup(openGroup === gIdx ? -1 : gIdx)}
+              />
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Warna</div>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              {['#5B5F97', '#FF6B6C', '#FFC145', '#22C55E', '#06B6D4', '#8B5CF6', '#F97316', '#EC4899'].map(w => (
+                <div key={w} onClick={() => setForm({ ...form, color: w })} style={{
+                  width: '28px', height: '28px', borderRadius: '50%', background: w, cursor: 'pointer',
+                  border: form.color === w ? '3px solid var(--text)' : '3px solid transparent',
+                }} />
+              ))}
+            </div>
           </>
         ) : (
           <>
@@ -487,19 +637,19 @@ function DashboardLayoutInner({ children }) {
         transform: isMobile && !sidebarOpen ? 'translateX(-100%)' : 'translateX(0)',
       }}>
         <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--sidebar-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <img className="app-logo" src="/logo.svg" alt="Stopboncos" />
+          <img className="app-logo" src="/logo.png" alt="Stopboncos" />
           {isMobile && (
             <button onClick={() => setSidebarOpen(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
           )}
         </div>
-        
+
         <div style={{ padding: '12px 10px', flex: 1 }}>
           {/* Konfigurasi Accordion */}
           <div style={{ marginBottom: '15px' }}>
             <div onClick={toggleKonf} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '9px 12px', cursor: 'pointer',
-              fontSize: '13.5px', borderRadius: '8px',
+              fontSize: '14px', borderRadius: '8px',
               color: konfOpen ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
               background: konfOpen ? 'var(--sidebar-active-bg)' : 'transparent',
               transition: 'all 0.15s',
@@ -537,39 +687,39 @@ function DashboardLayoutInner({ children }) {
           </div>
 
           {menuItems.map((item, idx) => {
-  if (item.type === 'section') return (
-    <div key={idx} style={{
-      padding: '12px 12px 4px',
-      fontSize: '10px', fontWeight: '600',
-      color: 'var(--text-muted)',
-      textTransform: 'uppercase', letterSpacing: '0.8px'
-    }}>{item.label}</div>
-  )
-  const isActive = item.href === '/dashboard'
-    ? pathname === '/dashboard'
-    : pathname === item.href || pathname.startsWith(item.href + '/')
-  return (
-    <div key={item.href} onClick={() => router.push(item.href)} style={{
-      display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', cursor: 'pointer',
-      fontSize: '16.5px', borderRadius: '8px',
-              marginBottom: '15px', transition: 'all 0.15s',
-              background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
-              color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-              fontWeight: isActive ? '600' : '400',
-    }}>
-      <span style={{ fontSize: '16px' }}>{item.icon}</span>
-      <span>{item.label}</span>
-    </div>
-  )
-})}
+            if (item.type === 'section') return (
+              <div key={idx} style={{
+                padding: '12px 12px 4px',
+                fontSize: '10px', fontWeight: '600',
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase', letterSpacing: '0.8px'
+              }}>{item.label}</div>
+            )
+            const isActive = item.href === '/dashboard'
+              ? pathname === '/dashboard'
+              : pathname === item.href || pathname.startsWith(item.href + '/')
+            return (
+              <div key={item.href} onClick={() => router.push(item.href)} style={{
+                display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', cursor: 'pointer',
+                fontSize: '14px', borderRadius: '8px',
+                marginBottom: '15px', transition: 'all 0.15s',
+                background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
+                color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+                fontWeight: isActive ? '600' : '400',
+              }}>
+                <span style={{ fontSize: '16px' }}>{item.icon}</span>
+                <span>{item.label}</span>
+              </div>
+            )
+          })}
         </div>
         <div style={{ padding: '12px 10px', borderTop: '1px solid var(--sidebar-border)' }}>
           <div onClick={toggleTheme} style={{
-              display: 'flex', alignItems: 'center', gap: '10px',
-              padding: '9px 12px', cursor: 'pointer',
-              fontSize: '16.5px', borderRadius: '8px',
-              color: 'var(--sidebar-text)', marginBottom: '2px',
-            }}
+            display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '9px 12px', cursor: 'pointer',
+            fontSize: '14px', borderRadius: '8px',
+            color: 'var(--sidebar-text)', marginBottom: '2px',
+          }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--sidebar-active-bg)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
@@ -577,11 +727,11 @@ function DashboardLayoutInner({ children }) {
             <span>{theme === 'dark' ? 'Mode Terang' : 'Mode Gelap'}</span>
           </div>
           <div onClick={handleLogout} style={{
-              display: 'flex', alignItems: 'center', gap: '10px',
-              padding: '9px 12px', cursor: 'pointer',
-              fontSize: '16.5px', borderRadius: '8px',
-              color: 'var(--danger)',
-            }}
+            display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '9px 12px', cursor: 'pointer',
+            fontSize: '14px', borderRadius: '8px',
+            color: 'var(--danger)',
+          }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--danger-light)'}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >

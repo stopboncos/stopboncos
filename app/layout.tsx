@@ -1,17 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Manrope } from "next/font/google";
 import { Providers } from "./providers";
 import "./globals.css?v=2";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+
+const manrope = Manrope({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: "Stopboncos - Pencatatan Keuangan Pribadi",
@@ -26,10 +20,10 @@ export default function RootLayout({
   return (
     <html
       lang="id"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col" >
+      <body className={`${manrope.className} min-h-full flex flex-col`} >
         <Providers>
           {children}
         </Providers>

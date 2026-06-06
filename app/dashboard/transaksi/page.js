@@ -1,11 +1,11 @@
 'use client'
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-
+const PAGE_SIZE = 20
 
 const bulanList = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
@@ -15,8 +15,8 @@ const bulanList = [
 const tahunList = Array.from({ length: 2030 - 2020 + 1 }, (_, i) => 2020 + i)
 
 const cardConfigs = [
-  { label: 'Semua',       gradient: 'linear-gradient(135deg, #5B5F97 0%, #7B7FC4 100%)', color: '#5B5F97' },
-  { label: 'Pemasukan',   gradient: 'linear-gradient(135deg, #16a34a 0%, #22C55E 100%)', color: '#16a34a' },
+  { label: 'Semua', gradient: 'linear-gradient(135deg, #5B5F97 0%, #7B7FC4 100%)', color: '#5B5F97' },
+  { label: 'Pemasukan', gradient: 'linear-gradient(135deg, #16a34a 0%, #22C55E 100%)', color: '#16a34a' },
   { label: 'Pengeluaran', gradient: 'linear-gradient(135deg, #dc2626 0%, #FF6B6C 100%)', color: '#dc2626' },
 ]
 
@@ -105,59 +105,162 @@ function MonthYearPicker({ bulan, tahun, onChange, onClose }) {
 export default function TransaksiPage() {
   const [transaksi, setTransaksi] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filterBulan, setFilterBulan] = useState(new Date().getMonth() + 1)
-  const [filterTahun, setFilterTahun] = useState(new Date().getFullYear())
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [page, setPage] = useState(0)
+
+  const [filterBulan, setFilterBulan] = useState(null)
+  const [filterTahun, setFilterTahun] = useState(null)
+  const filterActive = filterBulan !== null && filterTahun !== null
+
+  const [aggData, setAggData] = useState({ totalMasuk: 0, totalKeluar: 0 })
+
   const [activeCard, setActiveCard] = useState(0)
   const [showPicker, setShowPicker] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const searchRef = useRef(null)
+  const sentinelRef = useRef(null)
   const router = useRouter()
   const searchParams = useSearchParams()
   const detailId = searchParams.get('detail')
   const [isMobile, setIsMobile] = useState(false)
-
-useEffect(() => {
-  const check = () => setIsMobile(window.innerWidth < 768)
-  check()
-  window.addEventListener('resize', check)
-  return () => window.removeEventListener('resize', check)
-}, [])
-
-  useEffect(() => { fetchData() }, [filterBulan, filterTahun])
+  const fetchingRef = useRef(false)
 
   useEffect(() => {
-    window.addEventListener('refetch-transaksi', fetchData)
-    return () => window.removeEventListener('refetch-transaksi', fetchData)
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
   }, [])
 
-  const fetchData = async () => {
-    setLoading(true)
+  useEffect(() => {
+    setTransaksi([])
+    setPage(0)
+    setHasMore(true)
+    fetchingRef.current = false
+    fetchAggregat()
+    fetchPage(0, true)
+  }, [filterBulan, filterTahun])
+
+  useEffect(() => {
+    const handler = () => {
+      setTransaksi([])
+      setPage(0)
+      setHasMore(true)
+      fetchingRef.current = false
+      fetchAggregat()
+      fetchPage(0, true)
+    }
+    window.addEventListener('refetch-transaksi', handler)
+    return () => window.removeEventListener('refetch-transaksi', handler)
+  }, [filterBulan, filterTahun])
+
+  useEffect(() => {
+    if (!sentinelRef.current) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
+          setPage(prev => {
+            const nextPage = prev + 1
+            fetchPage(nextPage)
+            return prev
+          })
+        }
+      },
+      { threshold: 0.1 }
+    )
+    observer.observe(sentinelRef.current)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, loading])
+
+  const fetchAggregat = async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const bulanStr = String(filterBulan).padStart(2, '0')
-    const lastDay = new Date(filterTahun, filterBulan, 0).getDate()
-    const { data: t } = await supabase.from('transactions')
-      .select('*, accounts(name), categories(name, icon, color)')
+
+    let incomeQuery = supabase.from('transactions').select('amount').eq('user_id', user.id).eq('type', 'income')
+    let expenseQuery = supabase.from('transactions').select('amount').eq('user_id', user.id).eq('type', 'expense')
+
+    if (filterBulan !== null && filterTahun !== null) {
+      const bulanStr = String(filterBulan).padStart(2, '0')
+      const lastDay = new Date(filterTahun, filterBulan, 0).getDate()
+      const dateFrom = `${filterTahun}-${bulanStr}-01`
+      const dateTo = `${filterTahun}-${bulanStr}-${lastDay}`
+      incomeQuery = incomeQuery.gte('date', dateFrom).lte('date', dateTo)
+      expenseQuery = expenseQuery.gte('date', dateFrom).lte('date', dateTo)
+    }
+
+    const [{ data: incomeData }, { data: expenseData }] = await Promise.all([incomeQuery, expenseQuery])
+    const totalMasuk = (incomeData || []).reduce((s, t) => s + t.amount, 0)
+    const totalKeluar = (expenseData || []).reduce((s, t) => s + t.amount, 0)
+    setAggData({ totalMasuk, totalKeluar })
+  }
+
+  const fetchPage = async (pageNum, isReset = false) => {
+    if (fetchingRef.current) return
+    fetchingRef.current = true
+
+    if (isReset) setLoading(true)
+    else setLoadingMore(true)
+
+    const { data: { user } } = await supabase.auth.getUser()
+    const from = pageNum * PAGE_SIZE
+    const to = from + PAGE_SIZE - 1
+
+    let query = supabase
+      .from('transactions')
+      .select(`
+        *,
+        accounts!transactions_account_id_fkey(name),
+        account_to:accounts!transactions_account_to_id_fkey(name),
+        categories(name, icon, color)
+      `)
       .eq('user_id', user.id)
-      .gte('date', `${filterTahun}-${bulanStr}-01`)
-      .lte('date', `${filterTahun}-${bulanStr}-${lastDay}`)
+      .order('date', { ascending: false })
       .order('created_at', { ascending: false })
-    setTransaksi(t || [])
-    setLoading(false)
+      .range(from, to)
+
+    if (filterBulan !== null && filterTahun !== null) {
+      const bulanStr = String(filterBulan).padStart(2, '0')
+      const lastDay = new Date(filterTahun, filterBulan, 0).getDate()
+      query = query
+        .gte('date', `${filterTahun}-${bulanStr}-01`)
+        .lte('date', `${filterTahun}-${bulanStr}-${lastDay}`)
+    }
+
+    const { data } = await query
+    const rows = data || []
+
+    if (isReset) setTransaksi(rows)
+    else setTransaksi(prev => [...prev, ...rows])
+
+    setHasMore(rows.length === PAGE_SIZE)
+    setPage(pageNum)
+
+    if (isReset) setLoading(false)
+    else setLoadingMore(false)
+
+    fetchingRef.current = false
   }
 
   const handleDelete = async (id) => {
     if (!confirm('Hapus transaksi ini?')) return
     await supabase.from('transactions').delete().eq('id', id)
-    fetchData()
+    setTransaksi([])
+    setPage(0)
+    setHasMore(true)
+    fetchingRef.current = false
+    fetchAggregat()
+    fetchPage(0, true)
+  }
+
+  const handleClearFilter = () => {
+    setFilterBulan(null)
+    setFilterTahun(null)
   }
 
   const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
 
-  const income  = transaksi.filter(t => t.type === 'income')
-  const expense = transaksi.filter(t => t.type === 'expense')
-  const totalMasuk  = income.reduce((s, t) => s + t.amount, 0)
-  const totalKeluar = expense.reduce((s, t) => s + t.amount, 0)
+  const { totalMasuk, totalKeluar } = aggData
   const selisih = totalMasuk - totalKeluar
 
   const topKatCount = (list) => {
@@ -170,8 +273,9 @@ useEffect(() => {
     return Object.values(map).sort((a, b) => b.count - a.count)[0]
   }
 
-  const topAllCount     = topKatCount(transaksi)
-  const topIncomeCount  = topKatCount(income)
+  const income = transaksi.filter(t => t.type === 'income')
+  const expense = transaksi.filter(t => t.type === 'expense')
+  const topIncomeCount = topKatCount(income)
   const topExpenseCount = topKatCount(expense)
 
   const rowWhite = { display: 'flex', justifyContent: 'space-between', alignItems: 'center' }
@@ -179,38 +283,26 @@ useEffect(() => {
   const cardContent = [
     <>
       <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', marginBottom: '2px' }}>Sisa Saldo</div>
-      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>
-        {fmt(selisih)}
-      </div>
+      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>{fmt(selisih)}</div>
       <div style={{ ...rowWhite, marginBottom: '14px' }}>
         <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>Pemasukan − Pengeluaran</div>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>
-          {fmt(totalMasuk)} − {fmt(totalKeluar)}
-        </div>
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>{fmt(totalMasuk)} − {fmt(totalKeluar)}</div>
       </div>
     </>,
     <>
       <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', marginBottom: '2px' }}>Total Pemasukan</div>
-      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>
-        {fmt(totalMasuk)}
-      </div>
+      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>{fmt(totalMasuk)}</div>
       <div style={{ ...rowWhite, marginBottom: '14px' }}>
         <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>Transaksi Terbanyak</div>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>
-          {topIncomeCount ? `${topIncomeCount.icon || ''} ${topIncomeCount.name}` : '—'}
-        </div>
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>{topIncomeCount ? `${topIncomeCount.icon || ''} ${topIncomeCount.name}` : '—'}</div>
       </div>
     </>,
     <>
       <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', marginBottom: '2px' }}>Total Pengeluaran</div>
-      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>
-        {fmt(totalKeluar)}
-      </div>
+      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>{fmt(totalKeluar)}</div>
       <div style={{ ...rowWhite, marginBottom: '14px' }}>
         <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>Transaksi Terbanyak</div>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>
-          {topExpenseCount ? `${topExpenseCount.icon || ''} ${topExpenseCount.name}` : '—'}
-        </div>
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>{topExpenseCount ? `${topExpenseCount.icon || ''} ${topExpenseCount.name}` : '—'}</div>
       </div>
     </>,
   ]
@@ -221,7 +313,8 @@ useEffect(() => {
     ? transaksi.filter(tx =>
         (tx.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (tx.categories?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (tx.accounts?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+        (tx.accounts?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (tx.account_to?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
       )
     : baseList
 
@@ -230,11 +323,47 @@ useEffect(() => {
     else { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 100) }
   }
 
+  const getAmountColor = (tx) => {
+    if (tx.type === 'transfer') return 'var(--text-muted)'
+    return tx.type === 'income' ? '#22C55E' : 'var(--danger)'
+  }
+
+  const getAmountPrefix = (tx) => {
+    if (tx.type === 'transfer') return '🔄'
+    return tx.type === 'income' ? '+' : '−'
+  }
+
+  const getSubtitle = (tx) => {
+    if (tx.type === 'transfer') {
+      const tujuan = tx.account_to?.name || 'Dompet tujuan'
+      return `${tx.accounts?.name} → ${tujuan}`
+    }
+    return `${tx.accounts?.name} · ${new Date(tx.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}`
+  }
+
+  const getDetail = (tx) => {
+    if (tx.type === 'transfer') {
+      return new Date(tx.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+    }
+    return tx.categories?.name || '-'
+  }
+
+  const getIcon = (tx) => {
+    if (tx.type === 'transfer') return '🔄'
+    return tx.categories?.icon || '💸'
+  }
+
+  const getIconBg = (tx) => {
+    if (tx.type === 'transfer') return '#5B5F9722'
+    return (tx.categories?.color || '#5B5F97') + '22'
+  }
+
   return (
     <div>
       {showPicker && (
         <MonthYearPicker
-          bulan={filterBulan} tahun={filterTahun}
+          bulan={filterBulan || new Date().getMonth() + 1}
+          tahun={filterTahun || new Date().getFullYear()}
           onChange={(b, y) => { setFilterBulan(b); setFilterTahun(y) }}
           onClose={() => setShowPicker(false)}
         />
@@ -244,7 +373,7 @@ useEffect(() => {
       <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
           <div>
-            <h1 style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', margin: '0 0 4px' }}>Transaksi Bulanan</h1>
+            <h1 style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', margin: '0 0 4px' }}>Transaksi</h1>
             <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Kelola semua transaksi kamu</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
@@ -279,22 +408,32 @@ useEffect(() => {
 
       {!isSearching && (
         <>
-          {/* Filter periode full width */}
-          <button onClick={() => setShowPicker(true)} style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            width: '100%', padding: '10px 16px',
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '10px', cursor: 'pointer', marginBottom: '14px',
-            boxSizing: 'border-box',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '14px' }}>📅</span>
-              <span style={{ fontSize: '14px', fontWeight: '500', color: 'var(--text)' }}>
-                {bulanList[filterBulan - 1]} {filterTahun}
-              </span>
-            </div>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>▾</span>
-          </button>
+          {/* Filter Periode */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+            <button onClick={() => setShowPicker(true)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              flex: 1, padding: '10px 16px',
+              background: 'var(--bg-card)',
+              border: '1px solid ' + (filterActive ? 'var(--primary)' : 'var(--border)'),
+              borderRadius: '10px', cursor: 'pointer', boxSizing: 'border-box',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '14px' }}>📅</span>
+                <span style={{ fontSize: '14px', fontWeight: '500', color: filterActive ? 'var(--primary)' : 'var(--text)' }}>
+                  {filterActive ? `${bulanList[filterBulan - 1]} ${filterTahun}` : 'Semua'}
+                </span>
+              </div>
+              <span style={{ fontSize: '11px', color: filterActive ? 'var(--primary)' : 'var(--text-muted)' }}>▾</span>
+            </button>
+            {filterActive && (
+              <button onClick={handleClearFilter} style={{
+                padding: '10px 14px', background: 'var(--danger-light)',
+                border: '1px solid var(--danger)', borderRadius: '10px',
+                cursor: 'pointer', fontSize: '13px', color: 'var(--danger)',
+                fontWeight: '700', flexShrink: 0,
+              }}>✕</button>
+            )}
+          </div>
 
           {/* Summary Card */}
           <div style={{
@@ -324,7 +463,9 @@ useEffect(() => {
           <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)' }}>
             {isSearching ? `Hasil "${searchQuery}"` : 'Daftar Transaksi'}
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{searchList.length} transaksi</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            {isSearching ? `${searchList.length} transaksi` : `${transaksi.length} dimuat`}
+          </div>
         </div>
 
         {loading ? (
@@ -340,56 +481,74 @@ useEffect(() => {
             </div>
           </div>
         ) : (
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
-            {searchList.map((tx, i) => (
-              <div key={tx.id}
-              onClick={() => !isMobile && router.push(detailId === String(tx.id) ? '?' : `?detail=${tx.id}`)}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '12px 14px',
-                borderBottom: i < searchList.length - 1 ? '1px solid var(--border)' : 'none', background: detailId === tx.id ? 'var(--primary-light)' : 'transparent',
-    cursor: 'pointer',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                  <div style={{
-                    width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
-                    background: (tx.categories?.color || '#5B5F97') + '22',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '17px',
-                  }}>{tx.categories?.icon || '💸'}</div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: '500', fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {tx.description || '(Tanpa keterangan)'}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {tx.accounts?.name} · {new Date(tx.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: '600', fontSize: '13px', color: tx.type === 'income' ? '#22C55E' : 'var(--danger)' }}>
-                      {tx.type === 'income' ? '+' : '−'}{fmt(tx.amount)}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>
-                      {tx.categories?.name || '-'}
+          <>
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
+              {searchList.map((tx, i) => (
+                <div key={tx.id}
+                  onClick={() => !isMobile && router.push(detailId === String(tx.id) ? '?' : `?detail=${tx.id}`)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '12px 14px',
+                    borderBottom: i < searchList.length - 1 ? '1px solid var(--border)' : 'none',
+                    background: detailId === tx.id ? 'var(--pilih)' : 'transparent',
+                    cursor: 'pointer',
+                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                    <div style={{
+                      width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+                      background: getIconBg(tx),
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '17px',
+                    }}>{getIcon(tx)}</div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: '500', fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {tx.description || '(Tanpa keterangan)'}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {getSubtitle(tx)}
+                      </div>
                     </div>
                   </div>
-                  {/* Edit */}
-                  <button className="action-btn-mobile" onClick={() => router.push(`/dashboard/transaksi/tambah?id=${tx.id}`)} style={{
-                    background: 'var(--primary-light)', color: 'var(--primary)',
-                    border: 'none', borderRadius: '6px', padding: '5px 7px',
-                    cursor: 'pointer', fontSize: '13px', lineHeight: 1,
-                  }}>✏️</button>
-                  {/* Hapus */}
-                  <button className="action-btn-mobile" onClick={() => handleDelete(tx.id)} style={{
-                    background: 'var(--danger-light)', color: 'var(--danger)',
-                    border: 'none', borderRadius: '6px', padding: '5px 7px',
-                    cursor: 'pointer', fontSize: '13px', lineHeight: 1,
-                  }}>🗑️</button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: '600', fontSize: '13px', color: getAmountColor(tx) }}>
+                        {getAmountPrefix(tx)}{tx.type !== 'transfer' && fmt(tx.amount)}
+                        {tx.type === 'transfer' && ` ${fmt(tx.amount)}`}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>
+                        {getDetail(tx)}
+                      </div>
+                    </div>
+                    <button className="action-btn-mobile" onClick={(e) => { e.stopPropagation(); router.push(`/dashboard/transaksi/tambah?id=${tx.id}`) }} style={{
+                      background: 'var(--primary-light)', color: 'var(--primary)',
+                      border: 'none', borderRadius: '6px', padding: '5px 7px',
+                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                    }}>✏️</button>
+                    <button className="action-btn-mobile" onClick={(e) => { e.stopPropagation(); handleDelete(tx.id) }} style={{
+                      background: 'var(--danger-light)', color: 'var(--danger)',
+                      border: 'none', borderRadius: '6px', padding: '5px 7px',
+                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                    }}>🗑️</button>
+                  </div>
                 </div>
+              ))}
+            </div>
+
+            {!isSearching && (
+              <div ref={sentinelRef} style={{ height: '1px', marginTop: '8px' }} />
+            )}
+
+            {loadingMore && (
+              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                Memuat lebih banyak...
               </div>
-            ))}
-          </div>
+            )}
+
+            {!hasMore && !isSearching && transaksi.length > 0 && (
+              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                Semua transaksi sudah ditampilkan
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

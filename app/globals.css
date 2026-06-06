@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  --default-font-family: "Geist Mono", sans-serif;
+  --font-sans: "Geist Mono", sans-serif;
   --bg: #F4F4F8;
   --bg-card: #FFFFFB;
   --border: #E8E8EF;
@@ -21,6 +23,7 @@
   --topbar-bg: #FFFFFB;
   --background: #F4F4F8;
   --foreground: #1A1A2E;
+  --pilih: #ebebf56b;
 }
 
 .dark {
@@ -44,6 +47,7 @@
   --topbar-bg: #1C1C2E;
   --background: #12121E;
   --foreground: #EEEEF8;
+  --pilih: #ebebf56b;
 }
 
 /* html, body {
@@ -59,7 +63,8 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  /* font-family: var(--font-geist-sans), sans-serif !important; */
+  /* font-family: var(--font-sans), Arial, Helvetica, sans-serif; */
   transition: background 0.2s, color 0.2s;
 }
 
@@ -89,8 +94,8 @@ body {
   gap: 16px;
 }
 img.app-logo {
-  width: 160px;
-  height: 80px;
+  width: 180px;
+  /* height: 80px; */
   margin: auto;
   display: block;
 }

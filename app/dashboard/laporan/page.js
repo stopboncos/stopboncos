@@ -119,7 +119,7 @@ function LaporanPageInner() {
     const lastDay = new Date(filterTahun, filterBulan, 0).getDate()
     const [{ data: t }, { data: k }, { data: tg }] = await Promise.all([
       supabase.from('transactions')
-        .select('*, accounts(name), categories(name, icon, color)')
+        .select('*, accounts!transactions_account_id_fkey(name), account_to:accounts!transactions_account_to_id_fkey(name), categories(name, icon, color)')
         .eq('user_id', user.id)
         .gte('date', `${filterTahun}-${bulanStr}-01`)
         .lte('date', `${filterTahun}-${bulanStr}-${lastDay}`)
@@ -278,7 +278,7 @@ function LaporanPageInner() {
                 }} key={tx.id} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   padding: '12px 20px', borderBottom: i < transaksi.length - 1 ? '1px solid var(--border)' : 'none',
-                  cursor: 'pointer', background: selectedId === tx.id ? 'var(--primary-light)' : 'transparent'
+                  cursor: 'pointer', background: selectedId === tx.id ? 'var(--pilih)' : 'transparent'
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                     <div style={{

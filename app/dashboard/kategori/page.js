@@ -4,28 +4,9 @@ export const dynamic = 'force-dynamic'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { IconPicker, findGroupForIcon } from '@/components/IconPicker'
 
 const COLORS = ['#5B5F97', '#FF6B6C', '#FFC145', '#22C55E', '#06B6D4', '#8B5CF6', '#F97316', '#EC4899']
-
-const SIMPLE_ICONS = ['🍽️', '🚌', '🛍️', '🎮', '💊', '📚', '☕', '🏠', '💡', '📱', '✈️', '🎵', '💼', '📈', '💰', '🎁']
-
-const ICON_GROUPS = [
-  { label: 'Makanan & Minuman', icons: ['🍽️','🍔','🍕','🍜','🍱','🍣','🍛','🥗','🥩','🍗','🥚','🧆','🌮','🌯','🥪','🍞','🧁','🎂','🍰','🍩','🍪','🍫','🍬','🍭','☕','🧋','🍵','🥤','🧃','🍺','🍷','🥛','🧊'] },
-  { label: 'Transportasi', icons: ['🚌','🚗','🏍️','🚕','🚙','🚎','🚐','🚑','🚒','🚂','✈️','🚢','🛵','🚲','🛺','⛽','🅿️','🛣️'] },
-  { label: 'Rumah & Utilitas', icons: ['🏠','🏡','🏢','💡','🔌','🚿','🛁','🪑','🛋️','🪴','🧹','🧺','🪣','🔑','🚪','🛏️','🧯','📦'] },
-  { label: 'Belanja', icons: ['🛍️','👗','👠','👟','👜','🎒','🧣','🧤','🧥','👒','💍','💎','🛒','🏪','🏬'] },
-  { label: 'Hiburan', icons: ['🎮','🎵','🎬','🎭','🎨','🎤','🎧','🎯','🎲','🎰','🎳','🎻','🎹','🎸','📺','📸','🎟️','🎪'] },
-  { label: 'Kesehatan', icons: ['💊','🏥','🩺','🩻','💉','🩹','🧬','🫀','🧘','🏋️','🚴','🤸','🧖','😷'] },
-  { label: 'Pendidikan', icons: ['📚','📖','📝','✏️','🖊️','📐','📏','🎓','🏫','🔬','🔭','💻','🖥️','📊','📋'] },
-  { label: 'Pekerjaan & Keuangan', icons: ['💼','📈','📉','💰','💳','💵','🏦','🪙','🖨️','📠','📟','🗂️','📁','🤝'] },
-  { label: 'Perjalanan', icons: ['🗺️','🧳','🏖️','🏔️','🏕️','🗼','🏯','🏟️','🗽','🌋','🏝️','⛺','🎑','🌅','🌄'] },
-  { label: 'Lain-lain', icons: ['🎁','🎀','🪄','🧸','🪆','🖼️','🪞','🧲','🔧','🪛','🔨','🧰','⚙️','📌','📎','🔗','🪝','🌟','❤️','🙏','👏','✅','⚡','🔔'] },
-]
-
-const findGroupForIcon = (icon) => {
-  const idx = ICON_GROUPS.findIndex(g => g.icons.includes(icon))
-  return idx >= 0 ? idx : 0
-}
 
 const inputStyle = {
   width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
@@ -33,119 +14,20 @@ const inputStyle = {
   color: 'var(--text)', boxSizing: 'border-box',
 }
 
-// ── Komponen accordion icon untuk modal edit ──────────────────
-function EditModalForm({ editForm, setEditForm, openGroup, setOpenGroup }) {
-  return (
-    <>
-      {/* Tipe */}
-      <div style={{ marginBottom: '14px' }}>
-        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Tipe</label>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {[{ key: 'expense', label: 'Pengeluaran' }, { key: 'income', label: 'Pemasukan' }].map(t => (
-            <button key={t.key} onClick={() => setEditForm({ ...editForm, type: t.key })} style={{
-              flex: 1, padding: '8px', border: '1px solid',
-              borderColor: editForm.type === t.key ? 'var(--primary)' : 'var(--border)',
-              borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '500',
-              background: editForm.type === t.key ? 'var(--primary-light)' : 'transparent',
-              color: editForm.type === t.key ? 'var(--primary)' : 'var(--text-muted)',
-            }}>{t.label}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Nama */}
-      <div style={{ marginBottom: '14px' }}>
-        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Nama Kategori *</label>
-        <input
-          value={editForm.name}
-          onChange={e => setEditForm({ ...editForm, name: e.target.value })}
-          placeholder="mis. Makan Siang, Bensin..."
-          style={inputStyle}
-        />
-      </div>
-
-      {/* Icon — preview read-only + accordion */}
-      <div style={{ marginBottom: '14px' }}>
-        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Icon</label>
-
-        {/* Preview */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          padding: '8px 12px', border: '1px solid var(--border)',
-          borderRadius: '8px', background: 'var(--bg)', marginBottom: '10px',
-        }}>
-          <span style={{ fontSize: '22px' }}>{editForm.icon}</span>
-          <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Icon aktif — pilih dari daftar di bawah</span>
-        </div>
-
-        {/* Accordion */}
-        <div style={{ border: '1px solid var(--border)', borderRadius: '10px', overflow: 'hidden' }}>
-          {ICON_GROUPS.map((group, gIdx) => (
-            <div key={gIdx} style={{ borderBottom: gIdx < ICON_GROUPS.length - 1 ? '1px solid var(--border)' : 'none' }}>
-              <div
-                onClick={() => setOpenGroup(openGroup === gIdx ? -1 : gIdx)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '10px 14px', cursor: 'pointer',
-                  background: openGroup === gIdx ? 'var(--primary-light)' : 'var(--bg-card)',
-                  transition: 'background 0.15s',
-                }}
-              >
-                <span style={{ fontSize: '13px', fontWeight: openGroup === gIdx ? '600' : '400', color: openGroup === gIdx ? 'var(--primary)' : 'var(--text)' }}>
-                  {group.icons[0]} {group.label}
-                </span>
-                <span style={{
-                  fontSize: '11px', color: 'var(--text-muted)',
-                  display: 'inline-block',
-                  transform: openGroup === gIdx ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.2s',
-                }}>▼</span>
-              </div>
-              {openGroup === gIdx && (
-                <div style={{ padding: '12px 14px', background: 'var(--bg)', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                  {group.icons.map(icon => (
-                    <div
-                      key={icon}
-                      onClick={() => setEditForm({ ...editForm, icon })}
-                      style={{
-                        width: '38px', height: '38px', borderRadius: '8px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px',
-                        border: '2px solid',
-                        borderColor: editForm.icon === icon ? 'var(--primary)' : 'var(--border)',
-                        background: editForm.icon === icon ? 'var(--primary-light)' : 'transparent',
-                        transition: 'all 0.1s',
-                      }}
-                    >{icon}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Warna */}
-      <div style={{ marginBottom: '20px' }}>
-        <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '8px' }}>Warna</label>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {COLORS.map(w => (
-            <div key={w} onClick={() => setEditForm({ ...editForm, color: w })} style={{
-              width: '28px', height: '28px', borderRadius: '50%', background: w, cursor: 'pointer',
-              border: editForm.color === w ? '3px solid var(--text)' : '3px solid transparent',
-            }} />
-          ))}
-        </div>
-      </div>
-    </>
-  )
+const logActivity = async (userId, entityType, entityId, action, oldData, newData) => {
+  const { error } = await supabase.from('activity_logs').insert({
+    user_id: userId, entity_type: entityType, entity_id: entityId,
+    action, old_data: oldData || null, new_data: newData || null,
+  })
+  if (error) console.error('logActivity error:', error)
 }
 
-// ── Halaman utama ─────────────────────────────────────────────
 export default function KategoriPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const detailId = searchParams.get('detail')
   const [isMobile, setIsMobile] = useState(false)
+  
 
   const [kategori, setKategori] = useState([])
   const [loading, setLoading] = useState(true)
@@ -157,13 +39,14 @@ export default function KategoriPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  // Modal edit
+  // Modal edit (mobile)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editKat, setEditKat] = useState(null)
   const [editForm, setEditForm] = useState({})
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState('')
-  const [openGroup, setOpenGroup] = useState(0)
+  
+  const [editTxCount, setEditTxCount] = useState(0) // jumlah transaksi kategori ini
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
@@ -182,16 +65,28 @@ export default function KategoriPage() {
     setLoading(false)
   }
 
+  const checkTxCount = async (categoryId) => {
+    const { count } = await supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('category_id', categoryId)
+    return count || 0
+  }
+
   const handleSave = async () => {
     if (!form.name) { setError('Nama kategori wajib diisi'); return }
     setSaving(true)
     setError('')
     const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('categories').insert({
+    const { data: inserted, error } = await supabase.from('categories').insert({
       user_id: user.id, name: form.name, type: form.type, icon: form.icon, color: form.color,
-    })
-    if (error) setError(error.message)
-    else {
+    }).select().single()
+    if (error) {
+      setError(error.message)
+    } else {
+      await logActivity(user.id, 'kategori', inserted.id, 'create', null, {
+        name: form.name, type: form.type, icon: form.icon, color: form.color,
+      })
       setShowModal(false)
       setForm({ name: '', type: 'expense', icon: '🍽️', color: '#5B5F97' })
       fetchKategori()
@@ -199,15 +94,27 @@ export default function KategoriPage() {
     setSaving(false)
   }
 
-  const handleDelete = async (id, e) => {
+  const handleDelete = async (kat, e) => {
     e?.stopPropagation()
+    // Cek transaksi
+    const count = await checkTxCount(kat.id)
+    if (count > 0) {
+      alert(`Tidak bisa dihapus — kategori ini masih digunakan di ${count} transaksi.`)
+      return
+    }
     if (!confirm('Hapus kategori ini?')) return
-    await supabase.from('categories').delete().eq('id', id)
+    const { data: { user } } = await supabase.auth.getUser()
+    await logActivity(user.id, 'kategori', kat.id, 'delete', {
+      name: kat.name, type: kat.type, icon: kat.icon, color: kat.color,
+    }, null)
+    await supabase.from('categories').delete().eq('id', kat.id)
     fetchKategori()
   }
 
-  const openEditModal = (kat, e) => {
+  const openEditModal = async (kat, e) => {
     e?.stopPropagation()
+    const count = await checkTxCount(kat.id)
+    setEditTxCount(count)
     setEditKat(kat)
     setEditForm({ name: kat.name, type: kat.type, icon: kat.icon || '🍽️', color: kat.color || '#5B5F97' })
     setOpenGroup(findGroupForIcon(kat.icon || '🍽️'))
@@ -219,11 +126,18 @@ export default function KategoriPage() {
     if (!editForm.name) { setEditError('Nama kategori wajib diisi'); return }
     setEditSaving(true)
     setEditError('')
+    const { data: { user } } = await supabase.auth.getUser()
     const { error } = await supabase.from('categories').update({
       name: editForm.name, type: editForm.type, icon: editForm.icon, color: editForm.color,
     }).eq('id', editKat.id)
-    if (error) setEditError(error.message)
-    else {
+    if (error) {
+      setEditError(error.message)
+    } else {
+      await logActivity(user.id, 'kategori', editKat.id, 'update', {
+        name: editKat.name, type: editKat.type, icon: editKat.icon, color: editKat.color,
+      }, {
+        name: editForm.name, type: editForm.type, icon: editForm.icon, color: editForm.color,
+      })
       setShowEditModal(false)
       fetchKategori()
     }
@@ -279,7 +193,7 @@ export default function KategoriPage() {
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '14px 20px',
                 borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none',
-                background: detailId === kat.id ? 'var(--primary-light)' : 'transparent',
+                background: detailId === kat.id ? 'var(--pilih)' : 'transparent',
                 cursor: isMobile ? 'default' : 'pointer',
                 transition: 'background 0.15s',
               }}
@@ -303,7 +217,7 @@ export default function KategoriPage() {
                   border: 'none', borderRadius: '6px', padding: '5px 7px',
                   cursor: 'pointer', fontSize: '13px', lineHeight: 1,
                 }}>✏️</button>
-                <button className="action-btn-mobile" onClick={(e) => handleDelete(kat.id, e)} style={{
+                <button className="action-btn-mobile" onClick={(e) => handleDelete(kat, e)} style={{
                   background: 'var(--danger-light)', color: 'var(--danger)',
                   border: 'none', borderRadius: '6px', padding: '5px 7px',
                   cursor: 'pointer', fontSize: '13px', lineHeight: 1,
@@ -330,8 +244,6 @@ export default function KategoriPage() {
               <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)' }}>×</button>
             </div>
             {error && <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
-
-            {/* Tipe */}
             <div style={{ marginBottom: '14px' }}>
               <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Tipe</label>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -346,27 +258,19 @@ export default function KategoriPage() {
                 ))}
               </div>
             </div>
-            {/* Nama */}
             <div style={{ marginBottom: '14px' }}>
               <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Nama Kategori *</label>
               <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                 placeholder="mis. Makan Siang, Bensin..." style={inputStyle} />
             </div>
-            {/* Icon simple */}
             <div style={{ marginBottom: '14px' }}>
               <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '8px' }}>Icon</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {SIMPLE_ICONS.map(icon => (
-                  <div key={icon} onClick={() => setForm({ ...form, icon })} style={{
-                    width: '38px', height: '38px', borderRadius: '8px', cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px',
-                    border: '2px solid', borderColor: form.icon === icon ? 'var(--primary)' : 'var(--border)',
-                    background: form.icon === icon ? 'var(--primary-light)' : 'transparent',
-                  }}>{icon}</div>
-                ))}
-              </div>
+              <IconPicker
+                selectedIcon={form.icon}
+                onSelect={(icon) => setForm({ ...form, icon })}
+                
+              />
             </div>
-            {/* Warna */}
             <div style={{ marginBottom: '20px' }}>
               <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '8px' }}>Warna</label>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -378,7 +282,6 @@ export default function KategoriPage() {
                 ))}
               </div>
             </div>
-
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowModal(false)} style={{ padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer' }}>Batal</button>
               <button onClick={handleSave} disabled={saving} style={{ padding: '9px 18px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
@@ -389,7 +292,7 @@ export default function KategoriPage() {
         </div>
       )}
 
-      {/* Modal edit dengan accordion */}
+      {/* Modal edit dengan accordion (mobile) */}
       {showEditModal && (
         <div onClick={() => setShowEditModal(false)} style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
@@ -407,12 +310,62 @@ export default function KategoriPage() {
             </div>
             {editError && <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>{editError}</div>}
 
-            <EditModalForm
-              editForm={editForm}
-              setEditForm={setEditForm}
-              openGroup={openGroup}
-              setOpenGroup={setOpenGroup}
-            />
+            {/* Tipe — locked kalau ada transaksi */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Tipe</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {[{ key: 'expense', label: 'Pengeluaran' }, { key: 'income', label: 'Pemasukan' }].map(t => (
+                  <button
+                    key={t.key}
+                    onClick={() => editTxCount === 0 && setEditForm({ ...editForm, type: t.key })}
+                    style={{
+                      flex: 1, padding: '8px', border: '1px solid',
+                      borderColor: editForm.type === t.key ? 'var(--primary)' : 'var(--border)',
+                      borderRadius: '8px', fontSize: '13px', fontWeight: '500',
+                      background: editForm.type === t.key ? 'var(--primary-light)' : 'transparent',
+                      color: editForm.type === t.key ? 'var(--primary)' : 'var(--text-muted)',
+                      cursor: editTxCount > 0 ? 'not-allowed' : 'pointer',
+                      opacity: editTxCount > 0 && editForm.type !== t.key ? 0.4 : 1,
+                    }}
+                  >{t.label}</button>
+                ))}
+              </div>
+              {editTxCount > 0 && (
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  ⚠ Tipe tidak bisa diubah — kategori ini digunakan di {editTxCount} transaksi
+                </div>
+              )}
+            </div>
+
+            {/* Nama */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Nama Kategori *</label>
+              <input value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })}
+                placeholder="mis. Makan Siang, Bensin..." style={inputStyle} />
+            </div>
+
+            {/* Icon accordion */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '6px' }}>Icon</label>
+              <IconPicker
+                selectedIcon={editForm.icon}
+                onSelect={(icon) => setEditForm({ ...editForm, icon })}
+                
+              />
+            </div>
+
+            {/* Warna */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', display: 'block', marginBottom: '8px' }}>Warna</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {COLORS.map(w => (
+                  <div key={w} onClick={() => setEditForm({ ...editForm, color: w })} style={{
+                    width: '28px', height: '28px', borderRadius: '50%', background: w, cursor: 'pointer',
+                    border: editForm.color === w ? '3px solid var(--text)' : '3px solid transparent',
+                  }} />
+                ))}
+              </div>
+            </div>
 
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowEditModal(false)} style={{ padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer' }}>Batal</button>

@@ -48,9 +48,11 @@ export default function ProfilPage() {
   }
 
   const getInitial = () => {
-    if (profile?.full_name) return profile.full_name.charAt(0).toUpperCase()
-    return '?'
-  }
+  if (!profile?.full_name) return '?'
+  const parts = profile.full_name.trim().split(' ').filter(Boolean)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  return parts[0][0].toUpperCase()
+}
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '—'
@@ -301,15 +303,7 @@ export default function ProfilPage() {
           <div style={cardStyle}>
             {sectionTitle('Koneksi Eksternal', 'ID untuk integrasi layanan eksternal')}
 
-            <div style={{ marginBottom: '14px' }}>
-              <label style={labelStyle}>Sheet ID</label>
-              <input
-                value={profile?.sheet_id || ''}
-                readOnly
-                placeholder="Belum dikonfigurasi"
-                style={inputReadonlyStyle}
-              />
-            </div>
+            
 
             <div>
               <label style={labelStyle}>Telegram</label>
