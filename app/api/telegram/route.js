@@ -53,7 +53,7 @@ async function setSession(chatId, state) {
     chat_id: String(chatId),
     state,
     updated_at: new Date().toISOString()
-  })
+  }, { onConflict: 'chat_id' })
 }
 
 async function clearSession(chatId) {
