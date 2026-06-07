@@ -1,131 +1,332 @@
 'use client'
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Pencil, Trash2, Clock, Wallet, ArrowLeftRight, Tag, X } from 'lucide-react'
 
 const PAGE_SIZE = 20
 
-const bulanList = [
-  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
-]
+// ── Modal Tambah/Edit Transaksi ──────────────────────────────────────────────
+function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categories }) {
+  const now = new Date()
+  const todayStr = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-')
 
-const tahunList = Array.from({ length: 2030 - 2020 + 1 }, (_, i) => 2020 + i)
+  const emptyForm = {
+    amount: '',
+    account_id: '',
+    category_id: '',
+    description: '',
+    date: todayStr,
+    type: 'expense',
+  }
 
-const cardConfigs = [
-  { label: 'Semua', gradient: 'linear-gradient(135deg, #5B5F97 0%, #7B7FC4 100%)', color: '#5B5F97' },
-  { label: 'Pemasukan', gradient: 'linear-gradient(135deg, #16a34a 0%, #22C55E 100%)', color: '#16a34a' },
-  { label: 'Pengeluaran', gradient: 'linear-gradient(135deg, #dc2626 0%, #FF6B6C 100%)', color: '#dc2626' },
-]
+  const [form, setForm] = useState(emptyForm)
+  const [saving, setSaving] = useState(false)
+  const [visible, setVisible] = useState(false)
 
-function MonthYearPicker({ bulan, tahun, onChange, onClose }) {
-  const [tempBulan, setTempBulan] = useState(bulan)
-  const [tempTahun, setTempTahun] = useState(tahun)
-  const bulanRef = useRef(null)
-  const tahunRef = useRef(null)
-
+  // Animasi masuk
   useEffect(() => {
-    if (bulanRef.current) bulanRef.current.scrollTop = (tempBulan - 1) * 44
-    if (tahunRef.current) tahunRef.current.scrollTop = tahunList.indexOf(tempTahun) * 44
-  }, [])
+    if (isOpen) {
+      requestAnimationFrame(() => setVisible(true))
+      if (editData) {
+        setForm({
+          amount: editData.amount ?? '',
+          account_id: editData.account_id ?? '',
+          category_id: editData.category_id ?? '',
+          description: editData.description ?? '',
+          date: editData.date ?? todayStr,
+          type: editData.type ?? 'expense',
+        })
+      } else {
+        setForm(emptyForm)
+      }
+    }
+  }, [isOpen, editData])
 
-  const handleBulanScroll = () => {
-    const idx = Math.round(bulanRef.current.scrollTop / 44)
-    setTempBulan(Math.min(Math.max(idx + 1, 1), 12))
+  const close = () => {
+    setVisible(false)
+    setTimeout(onClose, 300)
   }
 
-  const handleTahunScroll = () => {
-    const idx = Math.round(tahunRef.current.scrollTop / 44)
-    setTempTahun(tahunList[Math.min(Math.max(idx, 0), tahunList.length - 1)])
+  const handleSave = async () => {
+    if (!form.amount || !form.account_id) return
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const payload = {
+      user_id: user.id,
+      amount: Number(form.amount),
+      account_id: form.account_id,
+      category_id: form.category_id || null,
+      description: form.description,
+      date: form.date,
+      type: form.type,
+    }
+    if (editData?.id) {
+      await supabase.from('transactions').update(payload).eq('id', editData.id)
+    } else {
+      await supabase.from('transactions').insert(payload)
+    }
+    setSaving(false)
+    close()
+    onSaved()
   }
 
-  const colStyle = {
-    flex: 1, height: '220px', overflowY: 'scroll',
-    scrollSnapType: 'y mandatory', scrollbarWidth: 'none',
-    msOverflowStyle: 'none', position: 'relative', padding: '88px 0',
+  if (!isOpen) return null
+
+  const inputStyle = {
+    width: '100%', padding: '11px 14px',
+    border: '1px solid var(--border)', borderRadius: '10px',
+    fontSize: '14px', background: 'var(--bg)', color: 'var(--text)',
+    outline: 'none', boxSizing: 'border-box', appearance: 'none',
+    WebkitAppearance: 'none',
   }
 
-  const itemStyle = (active) => ({
-    height: '44px', display: 'flex', alignItems: 'center',
-    justifyContent: 'center', scrollSnapAlign: 'center',
-    fontSize: active ? '17px' : '14px', fontWeight: active ? '600' : '400',
-    color: active ? 'var(--text)' : 'var(--text-muted)',
-    cursor: 'pointer', transition: 'all 0.1s', position: 'relative', zIndex: 2,
-  })
+  const filteredCategories = categories.filter(c =>
+    form.type === 'transfer' ? true : (c.type === form.type || !c.type)
+  )
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 200,
-      background: 'rgba(0,0,0,0.4)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '0 24px',
-    }} onClick={onClose}>
-      <div style={{
-        background: 'var(--bg-card)', borderRadius: '20px',
-        width: '100%', maxWidth: '360px', padding: '0 0 20px',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-      }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0 4px' }}>
-          <div style={{ width: '40px', height: '4px', borderRadius: '2px', background: 'var(--border)' }} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 20px 12px' }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '15px', color: 'var(--text-muted)', cursor: 'pointer' }}>Batal</button>
-          <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text)' }}>Pilih Periode</div>
-          <button onClick={() => { onChange(tempBulan, tempTahun); onClose() }} style={{ background: 'none', border: 'none', fontSize: '15px', color: 'var(--primary)', fontWeight: '600', cursor: 'pointer' }}>Selesai</button>
-        </div>
-        <div style={{ display: 'flex', position: 'relative', padding: '0 20px' }}>
-          <div style={{
-            position: 'absolute', left: '20px', right: '20px',
-            top: '50%', transform: 'translateY(-50%)',
-            height: '44px', background: 'var(--primary-light)',
-            borderRadius: '10px', pointerEvents: 'none', zIndex: 1,
-          }} />
-          <div ref={bulanRef} style={colStyle} onScroll={handleBulanScroll}>
-            {bulanList.map((b, i) => (
-              <div key={i} style={itemStyle(tempBulan === i + 1)}
-                onClick={() => { setTempBulan(i + 1); bulanRef.current.scrollTo({ top: i * 44, behavior: 'smooth' }) }}
-              >{b}</div>
-            ))}
+    <div
+      onClick={close}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 300,
+        background: visible ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '16px',
+        transition: 'background 0.3s ease',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--bg-card)',
+          borderRadius: '20px',
+          width: '100%', maxWidth: '440px',
+          maxHeight: '90vh', overflowY: 'auto',
+          padding: '24px',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(16px)',
+          transition: 'opacity 0.3s ease, transform 0.3s cubic-bezier(0.34,1.56,0.64,1)',
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '20px' }}>✏️</span>
+            <span style={{ fontSize: '17px', fontWeight: '700', color: 'var(--text)' }}>
+              {editData ? 'Edit Transaksi' : 'Catat Transaksi'}
+            </span>
           </div>
-          <div ref={tahunRef} style={colStyle} onScroll={handleTahunScroll}>
-            {tahunList.map((y, i) => (
-              <div key={y} style={itemStyle(tempTahun === y)}
-                onClick={() => { setTempTahun(y); tahunRef.current.scrollTo({ top: i * 44, behavior: 'smooth' }) }}
-              >{y}</div>
-            ))}
+          <button onClick={close} style={{
+            background: 'var(--bg)', border: 'none', borderRadius: '50%',
+            width: '30px', height: '30px', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', cursor: 'pointer', color: 'var(--text-muted)',
+          }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Jumlah */}
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+            Jumlah (Rp) <span style={{ color: 'var(--danger)' }}>*</span>
+          </label>
+          <input
+            type="number"
+            inputMode="numeric"
+            placeholder="0"
+            value={form.amount}
+            onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+            style={inputStyle}
+          />
+        </div>
+
+        {/* Dokumen / Metode */}
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+            Dokumen / Metode <span style={{ color: 'var(--danger)' }}>*</span>
+          </label>
+          <div style={{ position: 'relative' }}>
+            <select
+              value={form.account_id}
+              onChange={e => setForm(f => ({ ...f, account_id: e.target.value }))}
+              style={{ ...inputStyle, paddingRight: '36px' }}
+            >
+              <option value="">Pilih akun</option>
+              {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+            <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)', fontSize: '12px' }}>▾</span>
           </div>
+        </div>
+
+        {/* Kategori */}
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+            Kategori
+          </label>
+          <div style={{ position: 'relative' }}>
+            <select
+              value={form.category_id}
+              onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}
+              style={{ ...inputStyle, paddingRight: '36px' }}
+            >
+              <option value="">Tanpa kategori</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ${c.name}` : c.name}</option>)}
+            </select>
+            <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)', fontSize: '12px' }}>▾</span>
+          </div>
+        </div>
+
+        {/* Keterangan */}
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+            Keterangan
+          </label>
+          <textarea
+            placeholder="mis. Makan siang, Gaji April..."
+            value={form.description}
+            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            rows={3}
+            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+          />
+        </div>
+
+        {/* Tanggal */}
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+            Tanggal
+          </label>
+          <input
+            type="date"
+            value={form.date}
+            onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+            style={inputStyle}
+          />
+        </div>
+
+        {/* Tombol */}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={close} style={{
+            flex: 1, padding: '13px',
+            borderRadius: '99px',
+            border: 'none',
+            background: '#7C3AED22',
+            color: '#7C3AED',
+            fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+          }}>
+            Batal
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !form.amount || !form.account_id}
+            style={{
+              flex: 2, padding: '13px',
+              borderRadius: '99px',
+              border: 'none',
+              background: saving || !form.amount || !form.account_id ? '#ccc' : '#F97316',
+              color: 'white',
+              fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer',
+              transition: 'background 0.2s',
+            }}
+          >
+            {saving ? 'Menyimpan...' : 'Simpan Transaksi'}
+          </button>
         </div>
       </div>
     </div>
   )
 }
 
+// ── Main Page ────────────────────────────────────────────────────────────────
 export default function TransaksiPage() {
   const [transaksi, setTransaksi] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [page, setPage] = useState(0)
-
-  const [filterBulan, setFilterBulan] = useState(null)
-  const [filterTahun, setFilterTahun] = useState(null)
-  const filterActive = filterBulan !== null && filterTahun !== null
-
-  const [aggData, setAggData] = useState({ totalMasuk: 0, totalKeluar: 0 })
-
-  const [activeCard, setActiveCard] = useState(0)
-  const [showPicker, setShowPicker] = useState(false)
-  const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [isMobile, setIsMobile] = useState(false)
+  const [totalBulanIni, setTotalBulanIni] = useState(0)
+
+  // Modal state
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editData, setEditData] = useState(null)
+
+  // Filter state
+  const [filterWaktu, setFilterWaktu] = useState(null)
+  const [filterDompet, setFilterDompet] = useState(null)
+  const [filterTipe, setFilterTipe] = useState(null)
+  const [filterKategori, setFilterKategori] = useState(null)
+
+  // Picker state
+  const [openPicker, setOpenPicker] = useState(null)
+  const [pickerVisible, setPickerVisible] = useState(false)
+  const [accounts, setAccounts] = useState([])
+  const [categories, setCategories] = useState([])
+
+  // Temp state untuk list picker
+  const [tempDompet, setTempDompet] = useState(null)
+  const [tempTipe, setTempTipe] = useState(null)
+  const [tempKategori, setTempKategori] = useState(null)
+
+  const now = new Date()
+  const [tempWaktu, setTempWaktu] = useState({
+    bulan: now.getMonth() + 1,
+    tahun: now.getFullYear(),
+  })
+
   const searchRef = useRef(null)
   const sentinelRef = useRef(null)
+  const fetchingRef = useRef(false)
+  const bulanDrumRef = useRef(null)
+  const tahunDrumRef = useRef(null)
+
   const router = useRouter()
   const searchParams = useSearchParams()
   const detailId = searchParams.get('detail')
-  const [isMobile, setIsMobile] = useState(false)
-  const fetchingRef = useRef(false)
+
+  const bulanList = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+  const tahunList = Array.from({ length: 11 }, (_, i) => 2020 + i)
+
+  useEffect(() => {
+    if (openPicker) requestAnimationFrame(() => setPickerVisible(true))
+  }, [openPicker])
+
+  const closePicker = (callback) => {
+    setPickerVisible(false)
+    setTimeout(() => {
+      setOpenPicker(null)
+      if (callback) callback()
+    }, 300)
+  }
+
+  useEffect(() => {
+    if (openPicker === 'dompet') setTempDompet(filterDompet)
+    if (openPicker === 'tipe') setTempTipe(filterTipe)
+    if (openPicker === 'kategori') setTempKategori(filterKategori)
+  }, [openPicker])
+
+  useEffect(() => {
+    if (openPicker === 'waktu') {
+      const b = (filterWaktu?.bulan ?? now.getMonth() + 1) - 1
+      const t = tahunList.indexOf(filterWaktu?.tahun ?? now.getFullYear())
+      setTempWaktu({
+        bulan: filterWaktu?.bulan ?? now.getMonth() + 1,
+        tahun: filterWaktu?.tahun ?? now.getFullYear(),
+      })
+      setTimeout(() => {
+        bulanDrumRef.current?.scrollTo({ top: b * 44 })
+        tahunDrumRef.current?.scrollTo({ top: Math.max(0, t) * 44 })
+      }, 50)
+    }
+  }, [openPicker])
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
@@ -134,39 +335,25 @@ export default function TransaksiPage() {
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  useEffect(() => {
-    setTransaksi([])
-    setPage(0)
-    setHasMore(true)
-    fetchingRef.current = false
-    fetchAggregat()
-    fetchPage(0, true)
-  }, [filterBulan, filterTahun])
+  useEffect(() => { fetchMeta() }, [])
 
   useEffect(() => {
-    const handler = () => {
-      setTransaksi([])
-      setPage(0)
-      setHasMore(true)
-      fetchingRef.current = false
-      fetchAggregat()
-      fetchPage(0, true)
-    }
+    resetAndFetch()
+    fetchTotalBulanIni()
+  }, [filterWaktu, filterDompet, filterTipe, filterKategori])
+
+  useEffect(() => {
+    const handler = () => { resetAndFetch(); fetchTotalBulanIni() }
     window.addEventListener('refetch-transaksi', handler)
     return () => window.removeEventListener('refetch-transaksi', handler)
-  }, [filterBulan, filterTahun])
+  }, [filterWaktu, filterDompet, filterTipe, filterKategori])
 
   useEffect(() => {
     if (!sentinelRef.current) return
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
-          setPage(prev => {
-            const nextPage = prev + 1
-            fetchPage(nextPage)
-            return prev
-          })
-        }
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading)
+          setPage(prev => { fetchPage(prev + 1); return prev })
       },
       { threshold: 0.1 }
     )
@@ -174,379 +361,422 @@ export default function TransaksiPage() {
     return () => observer.disconnect()
   }, [hasMore, loadingMore, loading])
 
-  const fetchAggregat = async () => {
+  const drumColStyle = {
+    flex: 1, height: '220px', overflowY: 'scroll',
+    scrollSnapType: 'y mandatory', scrollbarWidth: 'none',
+    msOverflowStyle: 'none', padding: '88px 0', position: 'relative', zIndex: 2,
+  }
+
+  const drumItemStyle = (active) => ({
+    height: '44px', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', scrollSnapAlign: 'center',
+    fontSize: active ? '28px' : '18px',
+    fontWeight: active ? '500' : '400',
+    color: active ? 'var(--text)' : 'var(--text-muted)',
+    opacity: active ? 1 : 0.4,
+    cursor: 'pointer', transition: 'all 0.15s',
+  })
+
+  const fetchMeta = async () => {
     const { data: { user } } = await supabase.auth.getUser()
+    const [{ data: acc }, { data: cat }] = await Promise.all([
+      supabase.from('accounts').select('id, name').eq('user_id', user.id),
+      supabase.from('categories').select('id, name, icon').eq('user_id', user.id),
+    ])
+    setAccounts(acc || [])
+    setCategories(cat || [])
+  }
 
-    let incomeQuery = supabase.from('transactions').select('amount').eq('user_id', user.id).eq('type', 'income')
-    let expenseQuery = supabase.from('transactions').select('amount').eq('user_id', user.id).eq('type', 'expense')
+  const fetchTotalBulanIni = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    const targetBulan = filterWaktu?.bulan ?? (now.getMonth() + 1)
+    const targetTahun = filterWaktu?.tahun ?? now.getFullYear()
+    const pad = String(targetBulan).padStart(2, '0')
+    const lastDay = new Date(targetTahun, targetBulan, 0).getDate()
+    let q = supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .gte('date', `${targetTahun}-${pad}-01`)
+      .lte('date', `${targetTahun}-${pad}-${lastDay}`)
+    if (filterDompet) q = q.eq('account_id', filterDompet)
+    if (filterTipe) q = q.eq('type', filterTipe)
+    if (filterKategori) q = q.eq('category_id', filterKategori)
+    const { count } = await q
+    setTotalBulanIni(count || 0)
+  }
 
-    if (filterBulan !== null && filterTahun !== null) {
-      const bulanStr = String(filterBulan).padStart(2, '0')
-      const lastDay = new Date(filterTahun, filterBulan, 0).getDate()
-      const dateFrom = `${filterTahun}-${bulanStr}-01`
-      const dateTo = `${filterTahun}-${bulanStr}-${lastDay}`
-      incomeQuery = incomeQuery.gte('date', dateFrom).lte('date', dateTo)
-      expenseQuery = expenseQuery.gte('date', dateFrom).lte('date', dateTo)
+  const resetAndFetch = () => {
+    setTransaksi([])
+    setPage(0)
+    setHasMore(true)
+    fetchingRef.current = false
+    fetchPage(0, true)
+  }
+
+  const buildQuery = async (base) => {
+    const { data: { user } } = await supabase.auth.getUser()
+    let q = base.eq('user_id', user.id)
+    if (filterWaktu) {
+      const { bulan, tahun } = filterWaktu
+      const pad = String(bulan).padStart(2, '0')
+      const lastDay = new Date(tahun, bulan, 0).getDate()
+      q = q.gte('date', `${tahun}-${pad}-01`).lte('date', `${tahun}-${pad}-${lastDay}`)
     }
-
-    const [{ data: incomeData }, { data: expenseData }] = await Promise.all([incomeQuery, expenseQuery])
-    const totalMasuk = (incomeData || []).reduce((s, t) => s + t.amount, 0)
-    const totalKeluar = (expenseData || []).reduce((s, t) => s + t.amount, 0)
-    setAggData({ totalMasuk, totalKeluar })
+    if (filterDompet) q = q.eq('account_id', filterDompet)
+    if (filterTipe) q = q.eq('type', filterTipe)
+    if (filterKategori) q = q.eq('category_id', filterKategori)
+    return q
   }
 
   const fetchPage = async (pageNum, isReset = false) => {
     if (fetchingRef.current) return
     fetchingRef.current = true
-
     if (isReset) setLoading(true)
     else setLoadingMore(true)
-
-    const { data: { user } } = await supabase.auth.getUser()
     const from = pageNum * PAGE_SIZE
     const to = from + PAGE_SIZE - 1
-
-    let query = supabase
+    const base = supabase
       .from('transactions')
-      .select(`
-        *,
-        accounts!transactions_account_id_fkey(name),
-        account_to:accounts!transactions_account_to_id_fkey(name),
-        categories(name, icon, color)
-      `)
-      .eq('user_id', user.id)
+      .select(`*, accounts!transactions_account_id_fkey(name), account_to:accounts!transactions_account_to_id_fkey(name), categories(name, icon, color)`)
       .order('date', { ascending: false })
       .order('created_at', { ascending: false })
       .range(from, to)
-
-    if (filterBulan !== null && filterTahun !== null) {
-      const bulanStr = String(filterBulan).padStart(2, '0')
-      const lastDay = new Date(filterTahun, filterBulan, 0).getDate()
-      query = query
-        .gte('date', `${filterTahun}-${bulanStr}-01`)
-        .lte('date', `${filterTahun}-${bulanStr}-${lastDay}`)
-    }
-
-    const { data } = await query
+    const q = await buildQuery(base)
+    const { data } = await q
     const rows = data || []
-
     if (isReset) setTransaksi(rows)
     else setTransaksi(prev => [...prev, ...rows])
-
     setHasMore(rows.length === PAGE_SIZE)
     setPage(pageNum)
-
     if (isReset) setLoading(false)
     else setLoadingMore(false)
-
     fetchingRef.current = false
   }
 
   const handleDelete = async (id) => {
     if (!confirm('Hapus transaksi ini?')) return
     await supabase.from('transactions').delete().eq('id', id)
-    setTransaksi([])
-    setPage(0)
-    setHasMore(true)
-    fetchingRef.current = false
-    fetchAggregat()
-    fetchPage(0, true)
+    resetAndFetch()
+    fetchTotalBulanIni()
   }
 
-  const handleClearFilter = () => {
-    setFilterBulan(null)
-    setFilterTahun(null)
-  }
+  const openAddModal = () => { setEditData(null); setModalOpen(true) }
+  const openEditModal = (tx) => { setEditData(tx); setModalOpen(true) }
+  const handleSaved = () => { resetAndFetch(); fetchTotalBulanIni() }
 
   const fmt = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
-
-  const { totalMasuk, totalKeluar } = aggData
-  const selisih = totalMasuk - totalKeluar
-
-  const topKatCount = (list) => {
-    const map = {}
-    list.forEach(t => {
-      const key = t.category_id
-      if (!map[key]) map[key] = { name: t.categories?.name, icon: t.categories?.icon, count: 0 }
-      map[key].count += 1
-    })
-    return Object.values(map).sort((a, b) => b.count - a.count)[0]
+  const fmtJam = (createdAt) => {
+    if (!createdAt) return ''
+    return new Date(createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })
   }
 
-  const income = transaksi.filter(t => t.type === 'income')
-  const expense = transaksi.filter(t => t.type === 'expense')
-  const topIncomeCount = topKatCount(income)
-  const topExpenseCount = topKatCount(expense)
-
-  const rowWhite = { display: 'flex', justifyContent: 'space-between', alignItems: 'center' }
-
-  const cardContent = [
-    <>
-      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', marginBottom: '2px' }}>Sisa Saldo</div>
-      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>{fmt(selisih)}</div>
-      <div style={{ ...rowWhite, marginBottom: '14px' }}>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>Pemasukan − Pengeluaran</div>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>{fmt(totalMasuk)} − {fmt(totalKeluar)}</div>
-      </div>
-    </>,
-    <>
-      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', marginBottom: '2px' }}>Total Pemasukan</div>
-      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>{fmt(totalMasuk)}</div>
-      <div style={{ ...rowWhite, marginBottom: '14px' }}>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>Transaksi Terbanyak</div>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>{topIncomeCount ? `${topIncomeCount.icon || ''} ${topIncomeCount.name}` : '—'}</div>
-      </div>
-    </>,
-    <>
-      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', marginBottom: '2px' }}>Total Pengeluaran</div>
-      <div style={{ fontSize: '24px', fontWeight: '800', color: 'white', marginBottom: '10px', letterSpacing: '-0.5px' }}>{fmt(totalKeluar)}</div>
-      <div style={{ ...rowWhite, marginBottom: '14px' }}>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>Transaksi Terbanyak</div>
-        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: '500' }}>{topExpenseCount ? `${topExpenseCount.icon || ''} ${topExpenseCount.name}` : '—'}</div>
-      </div>
-    </>,
-  ]
-
-  const baseList = activeCard === 0 ? transaksi : activeCard === 1 ? income : expense
   const isSearching = searchQuery.trim().length > 0
-  const searchList = isSearching
+  const filteredList = isSearching
     ? transaksi.filter(tx =>
         (tx.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (tx.categories?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (tx.accounts?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (tx.account_to?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
       )
-    : baseList
+    : transaksi
 
-  const handleSearchToggle = () => {
-    if (searchOpen) { setSearchQuery(''); setSearchOpen(false) }
-    else { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 100) }
+  const groupByDate = (list) => {
+    const groups = {}
+    list.forEach(tx => {
+      if (!groups[tx.date]) groups[tx.date] = []
+      groups[tx.date].push(tx)
+    })
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]))
   }
 
-  const getAmountColor = (tx) => {
-    if (tx.type === 'transfer') return 'var(--text-muted)'
-    return tx.type === 'income' ? '#22C55E' : 'var(--danger)'
+  const formatGroupLabel = (dateStr) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const d = new Date(dateStr + 'T00:00:00')
+    const diff = Math.round((today - d) / 86400000)
+    if (diff === 0) return 'Hari ini'
+    if (diff === 1) return 'Kemarin'
+    return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
   }
 
-  const getAmountPrefix = (tx) => {
-    if (tx.type === 'transfer') return '🔄'
-    return tx.type === 'income' ? '+' : '−'
-  }
+  const getAmountColor = (tx) => tx.type === 'transfer' ? 'var(--text-muted)' : tx.type === 'income' ? '#16a34a' : 'var(--danger)'
+  const getAmountPrefix = (tx) => tx.type === 'transfer' ? '' : tx.type === 'income' ? '+' : '−'
+  const getSubtitle = (tx) => tx.type === 'transfer'
+    ? `${tx.accounts?.name} → ${tx.account_to?.name || 'Dompet tujuan'}`
+    : `${tx.accounts?.name} · ${tx.categories?.name || '-'}`
+  const getIcon = (tx) => tx.type === 'transfer' ? '🔄' : (tx.categories?.icon || '💸')
+  const getIconBg = (tx) => tx.type === 'transfer' ? '#5B5F9722' : ((tx.categories?.color || '#5B5F97') + '22')
 
-  const getSubtitle = (tx) => {
-    if (tx.type === 'transfer') {
-      const tujuan = tx.account_to?.name || 'Dompet tujuan'
-      return `${tx.accounts?.name} → ${tujuan}`
-    }
-    return `${tx.accounts?.name} · ${new Date(tx.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}`
-  }
+  const pillWaktu = filterWaktu ? `${bulanList[filterWaktu.bulan - 1]} ${filterWaktu.tahun}` : 'Semua waktu'
+  const pillDompet = filterDompet ? (accounts.find(a => a.id === filterDompet)?.name || 'Dompet') : 'Semua dompet'
+  const pillTipe = filterTipe ? ({ income: 'Pemasukan', expense: 'Pengeluaran', transfer: 'Transfer' }[filterTipe]) : 'Semua tipe'
+  const pillKategori = filterKategori ? (categories.find(c => c.id === filterKategori)?.name || 'Kategori') : 'Semua kategori'
+  const labelBulanCounter = filterWaktu
+    ? `${bulanList[filterWaktu.bulan - 1]} ${filterWaktu.tahun}`
+    : `${bulanList[now.getMonth()]} ${now.getFullYear()}`
 
-  const getDetail = (tx) => {
-    if (tx.type === 'transfer') {
-      return new Date(tx.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
-    }
-    return tx.categories?.name || '-'
-  }
+  const grouped = groupByDate(filteredList)
 
-  const getIcon = (tx) => {
-    if (tx.type === 'transfer') return '🔄'
-    return tx.categories?.icon || '💸'
-  }
+  const pillStyle = (active) => ({
+    display: 'inline-flex', alignItems: 'center', gap: '5px',
+    padding: '6px 11px',
+    background: active ? 'var(--primary-light)' : 'transparent',
+    border: '1px solid ' + (active ? 'var(--primary)' : 'var(--border)'),
+    borderRadius: '99px', fontSize: '12px',
+    color: active ? 'var(--primary)' : 'var(--text-muted)',
+    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+  })
 
-  const getIconBg = (tx) => {
-    if (tx.type === 'transfer') return '#5B5F9722'
-    return (tx.categories?.color || '#5B5F97') + '22'
+  const pillIcons = {
+    waktu: <Clock size={12} />,
+    dompet: <Wallet size={12} />,
+    tipe: <ArrowLeftRight size={12} />,
+    kategori: <Tag size={12} />,
   }
 
   return (
     <div>
-      {showPicker && (
-        <MonthYearPicker
-          bulan={filterBulan || new Date().getMonth() + 1}
-          tahun={filterTahun || new Date().getFullYear()}
-          onChange={(b, y) => { setFilterBulan(b); setFilterTahun(y) }}
-          onClose={() => setShowPicker(false)}
-        />
+      {/* Modal Tambah/Edit */}
+      <TransaksiModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSaved={handleSaved}
+        editData={editData}
+        accounts={accounts}
+        categories={categories}
+      />
+
+      {/* Picker modal filter */}
+      {openPicker && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 200,
+          background: pickerVisible ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0)',
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+          transition: 'background 0.3s ease',
+        }} onClick={() => closePicker()}>
+          <div style={{
+            background: 'var(--bg-card)', borderRadius: '20px 20px 0 0',
+            width: '100%', maxWidth: '480px', padding: '20px 20px 32px',
+            boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
+            maxHeight: '80vh', display: 'flex', flexDirection: 'column',
+            transform: pickerVisible ? 'translateY(0)' : 'translateY(100%)',
+            transition: 'transform 0.3s cubic-bezier(0.32, 0.72, 0, 1)',
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ width: '40px', height: '4px', borderRadius: '2px', background: 'var(--border)', margin: '0 auto 16px', flexShrink: 0 }} />
+
+            {openPicker === 'waktu' && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px' }}>
+                  <button onClick={() => closePicker()} style={{ background: 'none', border: 'none', fontSize: '14px', color: 'var(--text-muted)', cursor: 'pointer' }}>Batal</button>
+                  <span style={{ fontSize: '15px', fontWeight: '500', color: 'var(--text)' }}>Pilih periode</span>
+                  <button onClick={() => closePicker(() => setFilterWaktu(tempWaktu))} style={{ background: 'none', border: 'none', fontSize: '14px', color: 'var(--primary)', fontWeight: '600', cursor: 'pointer' }}>Selesai</button>
+                </div>
+                <div style={{ display: 'flex', padding: '0 20px', marginBottom: '-8px' }}>
+                  <div style={{ flex: 1, textAlign: 'center', fontSize: '10px', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Bulan</div>
+                  <div style={{ flex: 1, textAlign: 'center', fontSize: '10px', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Tahun</div>
+                </div>
+                <div style={{ display: 'flex', position: 'relative', padding: '0 20px' }}>
+                  <div style={{ position: 'absolute', left: '20px', right: '20px', top: '50%', transform: 'translateY(-50%)', height: '44px', background: 'var(--primary-light)', borderRadius: '10px', pointerEvents: 'none', zIndex: 1 }} />
+                  <div ref={bulanDrumRef} style={drumColStyle} onScroll={() => {
+                    const idx = Math.round(bulanDrumRef.current.scrollTop / 44)
+                    setTempWaktu(prev => ({ ...prev, bulan: Math.max(1, Math.min(idx + 1, 12)) }))
+                  }}>
+                    {bulanList.map((b, i) => (
+                      <div key={i} style={drumItemStyle(tempWaktu.bulan === i + 1)}
+                        onClick={() => bulanDrumRef.current.scrollTo({ top: i * 44, behavior: 'smooth' })}>{b}</div>
+                    ))}
+                  </div>
+                  <div ref={tahunDrumRef} style={drumColStyle} onScroll={() => {
+                    const idx = Math.round(tahunDrumRef.current.scrollTop / 44)
+                    setTempWaktu(prev => ({ ...prev, tahun: tahunList[Math.max(0, Math.min(idx, tahunList.length - 1))] }))
+                  }}>
+                    {tahunList.map((y, i) => (
+                      <div key={y} style={drumItemStyle(tempWaktu.tahun === y)}
+                        onClick={() => tahunDrumRef.current.scrollTo({ top: i * 44, behavior: 'smooth' })}>{y}</div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {openPicker === 'dompet' && (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontWeight: '700', fontSize: '16px', marginBottom: '16px', color: 'var(--text)' }}>Dompet</div>
+                <div style={{ flex: 1, overflowY: 'auto', marginBottom: '16px' }}>
+                  {[{ id: null, name: 'Semua dompet' }, ...accounts].map((a, i, arr) => (
+                    <div key={a.id || 'all'} onClick={() => setTempDompet(a.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+                      <span style={{ fontSize: '15px', color: 'var(--text)' }}>{a.name}</span>
+                      <div style={{ width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0, border: tempDompet === a.id ? '2px solid var(--primary)' : '2px solid var(--border)', background: tempDompet === a.id ? 'var(--primary)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}>
+                        {tempDompet === a.id && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'white' }} />}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={() => closePicker(() => setFilterDompet(null))} style={{ flex: 1, padding: '14px', borderRadius: '99px', border: '1px solid var(--border)', background: 'transparent', fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)', cursor: 'pointer' }}>Hapus filter</button>
+                  <button onClick={() => closePicker(() => setFilterDompet(tempDompet))} style={{ flex: 1, padding: '14px', borderRadius: '99px', border: 'none', background: 'var(--primary)', fontSize: '14px', fontWeight: '700', color: 'white', cursor: 'pointer' }}>Pasang</button>
+                </div>
+              </div>
+            )}
+
+            {openPicker === 'tipe' && (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontWeight: '700', fontSize: '16px', marginBottom: '16px', color: 'var(--text)' }}>Jenis transaksi</div>
+                <div style={{ flex: 1, overflowY: 'auto', marginBottom: '16px' }}>
+                  {[{ value: null, label: 'Semua tipe' }, { value: 'income', label: 'Pemasukan' }, { value: 'expense', label: 'Pengeluaran' }, { value: 'transfer', label: 'Transfer' }].map((t, i, arr) => (
+                    <div key={t.value || 'all'} onClick={() => setTempTipe(t.value)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+                      <span style={{ fontSize: '15px', color: 'var(--text)' }}>{t.label}</span>
+                      <div style={{ width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0, border: tempTipe === t.value ? '2px solid var(--primary)' : '2px solid var(--border)', background: tempTipe === t.value ? 'var(--primary)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}>
+                        {tempTipe === t.value && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'white' }} />}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={() => closePicker(() => setFilterTipe(null))} style={{ flex: 1, padding: '14px', borderRadius: '99px', border: '1px solid var(--border)', background: 'transparent', fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)', cursor: 'pointer' }}>Hapus filter</button>
+                  <button onClick={() => closePicker(() => setFilterTipe(tempTipe))} style={{ flex: 1, padding: '14px', borderRadius: '99px', border: 'none', background: 'var(--primary)', fontSize: '14px', fontWeight: '700', color: 'white', cursor: 'pointer' }}>Pasang</button>
+                </div>
+              </div>
+            )}
+
+            {openPicker === 'kategori' && (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontWeight: '700', fontSize: '16px', marginBottom: '16px', color: 'var(--text)' }}>Kategori</div>
+                <div style={{ flex: 1, overflowY: 'auto', marginBottom: '16px' }}>
+                  {[{ id: null, name: 'Semua kategori', icon: '' }, ...categories].map((c, i, arr) => (
+                    <div key={c.id || 'all'} onClick={() => setTempKategori(c.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+                      <span style={{ fontSize: '15px', color: 'var(--text)' }}>{c.icon ? `${c.icon} ${c.name}` : c.name}</span>
+                      <div style={{ width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0, border: tempKategori === c.id ? '2px solid var(--primary)' : '2px solid var(--border)', background: tempKategori === c.id ? 'var(--primary)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}>
+                        {tempKategori === c.id && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'white' }} />}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={() => closePicker(() => setFilterKategori(null))} style={{ flex: 1, padding: '14px', borderRadius: '99px', border: '1px solid var(--border)', background: 'transparent', fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)', cursor: 'pointer' }}>Hapus filter</button>
+                  <button onClick={() => closePicker(() => setFilterKategori(tempKategori))} style={{ flex: 1, padding: '14px', borderRadius: '99px', border: 'none', background: 'var(--primary)', fontSize: '14px', fontWeight: '700', color: 'white', cursor: 'pointer' }}>Pasang</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Header */}
-      <div style={{ marginBottom: '16px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <div>
-            <h1 style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', margin: '0 0 4px' }}>Transaksi</h1>
-            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Kelola semua transaksi kamu</p>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-            <button onClick={handleSearchToggle} style={{
-              padding: '9px 12px',
-              background: searchOpen ? 'var(--primary-light)' : 'var(--bg-card)',
-              border: '1px solid ' + (searchOpen ? 'var(--primary)' : 'var(--border)'),
-              borderRadius: '8px', cursor: 'pointer',
-              fontSize: '14px', color: searchOpen ? 'var(--primary)' : 'var(--text-muted)',
-            }}>🔍</button>
-            <button onClick={() => router.push('/dashboard/transaksi/tambah')} style={{
-              padding: '9px 16px', background: 'var(--primary)', color: 'white',
-              border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer',
-            }}>+ Tambah</button>
-          </div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '14px' }}>
+        <div>
+          <h1 style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', margin: '0 0 4px' }}>Transaksi</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
+            {totalBulanIni} transaksi di {labelBulanCounter}
+          </p>
         </div>
-        {searchOpen && (
-          <div style={{ marginTop: '10px' }}>
-            <input ref={searchRef} type="text" value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Cari transaksi, kategori, akun..."
-              style={{
-                width: '100%', padding: '10px 14px',
-                border: '1.5px solid var(--primary)', borderRadius: '10px',
-                fontSize: '14px', background: 'var(--bg-card)', color: 'var(--text)',
-                outline: 'none', boxSizing: 'border-box',
-              }}
-            />
-          </div>
-        )}
+        <button onClick={openAddModal} style={{
+          display: 'flex', alignItems: 'center', gap: '5px',
+          padding: '9px 14px', background: 'var(--primary)', color: 'white',
+          border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer',
+          flexShrink: 0,
+        }}>+ Transaksi Baru</button>
       </div>
 
-      {!isSearching && (
-        <>
-          {/* Filter Periode */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-            <button onClick={() => setShowPicker(true)} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              flex: 1, padding: '10px 16px',
-              background: 'var(--bg-card)',
-              border: '1px solid ' + (filterActive ? 'var(--primary)' : 'var(--border)'),
-              borderRadius: '10px', cursor: 'pointer', boxSizing: 'border-box',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '14px' }}>📅</span>
-                <span style={{ fontSize: '14px', fontWeight: '500', color: filterActive ? 'var(--primary)' : 'var(--text)' }}>
-                  {filterActive ? `${bulanList[filterBulan - 1]} ${filterTahun}` : 'Semua'}
-                </span>
-              </div>
-              <span style={{ fontSize: '11px', color: filterActive ? 'var(--primary)' : 'var(--text-muted)' }}>▾</span>
-            </button>
-            {filterActive && (
-              <button onClick={handleClearFilter} style={{
-                padding: '10px 14px', background: 'var(--danger-light)',
-                border: '1px solid var(--danger)', borderRadius: '10px',
-                cursor: 'pointer', fontSize: '13px', color: 'var(--danger)',
-                fontWeight: '700', flexShrink: 0,
-              }}>✕</button>
-            )}
-          </div>
-
-          {/* Summary Card */}
-          <div style={{
-            background: cardConfigs[activeCard].gradient,
-            borderRadius: '18px', padding: '18px 18px 14px',
-            marginBottom: '16px', transition: 'background 0.3s ease',
-          }}>
-            {cardContent[activeCard]}
-            <div style={{ display: 'flex', gap: '6px' }}>
-              {cardConfigs.map((c, i) => (
-                <button key={i} onClick={() => setActiveCard(i)} style={{
-                  flex: 1, padding: '7px 0', borderRadius: '20px', border: 'none',
-                  background: activeCard === i ? 'white' : 'rgba(255,255,255,0.2)',
-                  color: activeCard === i ? cardConfigs[activeCard].color : 'rgba(255,255,255,0.6)',
-                  fontWeight: activeCard === i ? '700' : '400',
-                  fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s',
-                }}>{c.label}</button>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* List */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-          <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)' }}>
-            {isSearching ? `Hasil "${searchQuery}"` : 'Daftar Transaksi'}
-          </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {isSearching ? `${searchList.length} transaksi` : `${transaksi.length} dimuat`}
-          </div>
+      {/* Search + Filter Pills */}
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', marginBottom: '16px', overflow: 'hidden' }}>
+        <div style={{ position: 'relative' }}>
+          <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', fontSize: '15px', color: 'var(--text-muted)', pointerEvents: 'none' }}>🔍</span>
+          <input
+            ref={searchRef}
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Cari transaksi, kategori, akun..."
+            style={{ width: '100%', padding: '11px 14px 11px 36px', border: 'none', borderRadius: '0', fontSize: '14px', background: 'transparent', color: 'var(--text)', outline: 'none', boxSizing: 'border-box' }}
+          />
         </div>
+        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', padding: '8px 10px', scrollbarWidth: 'none' }}>
+          {[
+            { key: 'waktu', label: pillWaktu, active: !!filterWaktu },
+            { key: 'dompet', label: pillDompet, active: !!filterDompet },
+            { key: 'tipe', label: pillTipe, active: !!filterTipe },
+            { key: 'kategori', label: pillKategori, active: !!filterKategori },
+          ].map(p => (
+            <button key={p.key} onClick={() => setOpenPicker(p.key)} style={pillStyle(p.active)}>
+              {pillIcons[p.key]}
+              <span style={{ fontSize: '12px' }}>{p.label}</span>
+              <span style={{ fontSize: '10px' }}>▾</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* List transaksi */}
+      <div>
+        {isSearching && (
+          <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)', marginBottom: '10px' }}>
+            Hasil "{searchQuery}"
+          </div>
+        )}
 
         {loading ? (
           <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>Memuat...</div>
-        ) : searchList.length === 0 ? (
+        ) : filteredList.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '64px', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '40px', marginBottom: '12px' }}>{isSearching ? '🔍' : '💸'}</div>
-            <div style={{ fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}>
-              {isSearching ? 'Tidak ditemukan' : 'Belum ada transaksi'}
-            </div>
-            <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-              {isSearching ? 'Coba kata kunci lain' : 'Tambah transaksi pertama Anda'}
-            </div>
+            <div style={{ fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}>{isSearching ? 'Tidak ditemukan' : 'Belum ada transaksi'}</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>{isSearching ? 'Coba kata kunci lain' : 'Tambah transaksi pertama Anda'}</div>
           </div>
         ) : (
           <>
-            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
-              {searchList.map((tx, i) => (
-                <div key={tx.id}
-                  onClick={() => !isMobile && router.push(detailId === String(tx.id) ? '?' : `?detail=${tx.id}`)}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '12px 14px',
-                    borderBottom: i < searchList.length - 1 ? '1px solid var(--border)' : 'none',
-                    background: detailId === tx.id ? 'var(--pilih)' : 'transparent',
-                    cursor: 'pointer',
-                  }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                    <div style={{
-                      width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
-                      background: getIconBg(tx),
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '17px',
-                    }}>{getIcon(tx)}</div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: '500', fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {tx.description || '(Tanpa keterangan)'}
-                      </div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {getSubtitle(tx)}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: '600', fontSize: '13px', color: getAmountColor(tx) }}>
-                        {getAmountPrefix(tx)}{tx.type !== 'transfer' && fmt(tx.amount)}
-                        {tx.type === 'transfer' && ` ${fmt(tx.amount)}`}
-                      </div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>
-                        {getDetail(tx)}
-                      </div>
-                    </div>
-                    <button className="action-btn-mobile" onClick={(e) => { e.stopPropagation(); router.push(`/dashboard/transaksi/tambah?id=${tx.id}`) }} style={{
-                      background: 'var(--primary-light)', color: 'var(--primary)',
-                      border: 'none', borderRadius: '6px', padding: '5px 7px',
-                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
-                    }}>✏️</button>
-                    <button className="action-btn-mobile" onClick={(e) => { e.stopPropagation(); handleDelete(tx.id) }} style={{
-                      background: 'var(--danger-light)', color: 'var(--danger)',
-                      border: 'none', borderRadius: '6px', padding: '5px 7px',
-                      cursor: 'pointer', fontSize: '13px', lineHeight: 1,
-                    }}>🗑️</button>
-                  </div>
+            {grouped.map(([dateKey, items]) => (
+              <div key={dateKey} style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                  {formatGroupLabel(dateKey)}
                 </div>
-              ))}
-            </div>
-
-            {!isSearching && (
-              <div ref={sentinelRef} style={{ height: '1px', marginTop: '8px' }} />
-            )}
-
-            {loadingMore && (
-              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                Memuat lebih banyak...
+                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
+                  {items.map((tx, i) => (
+                    <div key={tx.id}
+                      onClick={() => !isMobile && router.push(detailId === String(tx.id) ? '?' : `?detail=${tx.id}`)}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '11px 13px',
+                        borderBottom: i < items.length - 1 ? '1px solid var(--border)' : 'none',
+                        background: detailId === String(tx.id) ? 'var(--pilih)' : 'transparent',
+                        cursor: 'pointer', gap: '8px',
+                      }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0, background: getIconBg(tx), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '17px' }}>{getIcon(tx)}</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: '500', fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {tx.description || '(Tanpa keterangan)'}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{getSubtitle(tx)}</span>
+                            {fmtJam(tx.created_at) && (<><span style={{ flexShrink: 0 }}>·</span><span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>{fmtJam(tx.created_at)}</span></>)}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <div style={{ fontWeight: '600', fontSize: '13px', color: getAmountColor(tx) }}>
+                          {getAmountPrefix(tx)}{fmt(tx.amount)}
+                        </div>
+                        <button className="action-btn-mobile"
+                          onClick={(e) => { e.stopPropagation(); openEditModal(tx) }}
+                          style={{ background: 'var(--primary-light)', color: 'var(--primary)', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', flexShrink: 0 }}>
+                          <Pencil size={13} />
+                        </button>
+                        <button className="action-btn-mobile"
+                          onClick={(e) => { e.stopPropagation(); handleDelete(tx.id) }}
+                          style={{ background: 'var(--danger-light)', color: 'var(--danger)', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', flexShrink: 0 }}>
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
-
+            ))}
+            {!isSearching && <div ref={sentinelRef} style={{ height: '1px', marginTop: '8px' }} />}
+            {loadingMore && <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '13px' }}>Memuat lebih banyak...</div>}
             {!hasMore && !isSearching && transaksi.length > 0 && (
-              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>
-                Semua transaksi sudah ditampilkan
-              </div>
+              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>Semua transaksi sudah ditampilkan</div>
             )}
           </>
         )}

@@ -5,13 +5,26 @@ import { supabase } from '@/lib/supabase'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { IconPicker, findGroupForIcon } from '@/components/IconPicker'
+import { 
+  LayoutDashboard, ArrowLeftRight, FileText, 
+  Star, User, Settings, ChevronDown,
+  Sun, Moon, LogOut, Menu
+} from 'lucide-react'
 
+
+// const menuItems = [
+//   { href: '/dashboard', label: 'Dashboard', icon: '📊' },
+//   { href: '/dashboard/transaksi', label: 'Transaksi', icon: '💸' },
+//   { href: '/dashboard/laporan', label: 'Laporan Bulanan', icon: '📋' },
+//   { href: '/dashboard/langganan', label: 'Langganan', icon: '⭐' },
+//   { href: '/dashboard/profil', label: 'Profil', icon: '👤' },
+// ]
 const menuItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: '📊' },
-  { href: '/dashboard/transaksi', label: 'Transaksi', icon: '💸' },
-  { href: '/dashboard/laporan', label: 'Laporan Bulanan', icon: '📋' },
-  { href: '/dashboard/langganan', label: 'Langganan', icon: '⭐' },
-  { href: '/dashboard/profil', label: 'Profil', icon: '👤' },
+  { href: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={16} /> },
+  { href: '/dashboard/transaksi', label: 'Transaksi', icon: <ArrowLeftRight size={16} /> },
+  { href: '/dashboard/laporan', label: 'Laporan Bulanan', icon: <FileText size={16} /> },
+  { href: '/dashboard/langganan', label: 'Langganan', icon: <Star size={16} /> },
+  { href: '/dashboard/profil', label: 'Profil', icon: <User size={16} /> },
 ]
 
 const konfiguasiItems = [
@@ -655,15 +668,10 @@ function DashboardLayoutInner({ children }) {
               transition: 'all 0.15s',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '16px' }}>⚙️</span>
+                <Settings size={16} />
                 <span>Konfigurasi</span>
               </div>
-              <span style={{
-                fontSize: '14px', color: 'var(--text-muted)',
-                transition: 'transform 0.2s',
-                display: 'inline-block',
-                transform: konfOpen ? 'rotate(180deg)' : 'rotate(0deg)'
-              }}>▼</span>
+              <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: konfOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} />
             </div>
             {konfOpen && (
               <div style={{ paddingLeft: '16px', marginTop: '2px' }}>

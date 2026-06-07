@@ -18,6 +18,7 @@ export default function DashboardPage() {
   const [dailyTarget, setDailyTarget] = useState(null)
   const [dailyData, setDailyData] = useState([])
   const [loading, setLoading] = useState(true)
+  const [periodeLabel, setPeriodeLabel] = useState('')
 
   const CHART_HEIGHT = 60
   const BAR_WIDTH = 46
@@ -36,7 +37,7 @@ export default function DashboardPage() {
       const today = new Date()
       const todayStr = today.toISOString().slice(0, 10)
 
-      const [{ data: txs }, { data: tgts }, { data: dt }] = await Promise.all([
+      const [{ data: txs }, { data: tgts }, { data: dt }, { data: akuns }] = await Promise.all([
         supabase.from('transactions')
           .select('*, categories(name, icon, color)')
           .eq('user_id', user.id)
@@ -48,12 +49,27 @@ export default function DashboardPage() {
           .select('*')
           .eq('user_id', user.id)
           .single(),
+        supabase.from('accounts')
+          .select('balance')
+          .eq('user_id', user.id),
       ])
 
       if (!txs) return
 
-      const pemasukan = txs.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-      const pengeluaran = txs.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+      const startOfMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
+      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+      const endOfMonthStr = endOfMonth.toISOString().slice(0, 10)
+
+      const pemasukan = txs
+        .filter(t => t.type === 'income' && t.date >= startOfMonth && t.date <= endOfMonthStr)
+        .reduce((s, t) => s + Number(t.amount), 0)
+
+      const pengeluaran = txs
+        .filter(t => t.type === 'expense' && t.date >= startOfMonth && t.date <= endOfMonthStr)
+        .reduce((s, t) => s + Number(t.amount), 0)
+
+      const periode = `${new Date(startOfMonth).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })} - ${endOfMonth.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}`
+      setPeriodeLabel(periode)
 
       // 15 hari: 14 hari lalu + hari ini + 1 hari ke depan (besok)
       const days = []
@@ -77,7 +93,7 @@ export default function DashboardPage() {
       setDailyData(days)
       setDailyTarget(dt || null)
 
-      const startOfMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
+
       const targetWithProgress = (tgts || []).map(target => {
         const spent = txs
           .filter(t => t.type === 'expense' && t.category_id === target.category_id && t.date >= startOfMonth)
@@ -87,7 +103,8 @@ export default function DashboardPage() {
       })
 
       const targetLewat = targetWithProgress.filter(t => t.spent > Number(t.quota)).length
-      setStats({ saldo: pemasukan - pengeluaran, pemasukan, pengeluaran, targetLewat })
+      const saldo = (akuns || []).reduce((s, a) => s + Number(a.balance), 0)
+      setStats({ saldo, pemasukan, pengeluaran, targetLewat })
       setTransaksi(txs.slice(0, 5))
       setTargets(targetWithProgress)
       setLoading(false)
@@ -155,11 +172,11 @@ export default function DashboardPage() {
     : Math.max(...dailyData.map(d => d.total), 1)
 
   const calcBarH = (total) => {
-  if (total === 0) return 0
-  const dashLineH = CHART_HEIGHT * (1 - DASH_RATIO) // 42px
-  const h = (total / maxDaily) * dashLineH
-  return Math.min(dashLineH * 1.5, Math.max(12, h)) // cap 63px = 42 + 50%
-}
+    if (total === 0) return 0
+    const dashLineH = CHART_HEIGHT * (1 - DASH_RATIO) // 42px
+    const h = (total / maxDaily) * dashLineH
+    return Math.min(dashLineH * 1.5, Math.max(12, h)) // cap 63px = 42 + 50%
+  }
 
   const skeletonStyle = {
     background: 'var(--border)',
@@ -169,8 +186,8 @@ export default function DashboardPage() {
 
   const cards = [
     { label: 'Total Saldo', value: fmt(stats.saldo), icon: '👛', bg: 'var(--primary-light)', change: '+12%', changeColor: '#22C55E' },
-    { label: 'Pemasukan', value: fmt(stats.pemasukan), icon: '📈', bg: '#F0FDF4', change: '+5%', changeColor: '#22C55E' },
-    { label: 'Pengeluaran', value: fmt(stats.pengeluaran), icon: '📉', bg: 'var(--danger-light)', change: '+8%', changeColor: 'var(--danger)' },
+    { label: periodeLabel, value: fmt(stats.pemasukan), icon: '📈', bg: '#F0FDF4', change: '', changeColor: '' },
+    { label: periodeLabel, value: fmt(stats.pengeluaran), icon: '📉', bg: 'var(--danger-light)', change: '', changeColor: '' },
     { label: 'Target Lewat', value: stats.targetLewat + ' kategori', icon: '🎯', bg: 'var(--accent-light)', change: '', changeColor: '' },
   ]
 
