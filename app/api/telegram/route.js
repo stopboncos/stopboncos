@@ -125,7 +125,8 @@ export async function POST(req) {
 
     // Step: pilih kategori
     if (session.step === 'pilih_kategori') {
-      const kat = session.kategori.find(k => `${k.icon || ''} ${k.name}`.trim() === text.trim() || k.name === text.trim())
+      const katId = session.kategoriMap?.[text.trim()]
+      const kat = session.kategori.find(k => k.id === katId)
       if (!kat) {
         await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nama kategori yang tersedia.')
         return Response.json({ ok: true })
@@ -138,16 +139,22 @@ export async function POST(req) {
         return Response.json({ ok: true })
       }
 
-      await setSession(chatId, { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name, akuns })
+      const akunMap = {}
+      const akunKeyboard = akuns.map(a => {
+        const label = `${a.name} (${fmt(a.balance)})`
+        akunMap[label] = a.id
+        return [{ text: label }]
+      })
 
-      const keyboard = akuns.map(a => ([{ text: `${a.name} (${fmt(a.balance)})` }]))
-      await sendMessage(chatId, '💰 Pilih dompet:', keyboard)
+      await setSession(chatId, { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name, akuns, akunMap })
+      await sendMessage(chatId, '💰 Pilih dompet:', akunKeyboard)
       return Response.json({ ok: true })
     }
 
     // Step: pilih dompet
     if (session.step === 'pilih_dompet') {
-      const akun = session.akuns.find(a => text.startsWith(a.name))
+      const akunId = session.akunMap?.[text.trim()]
+      const akun = session.akuns.find(a => a.id === akunId)
       if (!akun) {
         await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nama dompet yang tersedia.')
         return Response.json({ ok: true })
@@ -210,9 +217,14 @@ export async function POST(req) {
       return Response.json({ ok: true })
     }
 
-    await setSession(chatId, { step: 'pilih_kategori', type, amount, description, date, kategori })
+    const kategoriMap = {}
+    const keyboard = kategori.map(k => {
+      const label = `${k.icon || ''} ${k.name}`.trim()
+      kategoriMap[label] = k.id
+      return [{ text: label }]
+    })
 
-    const keyboard = kategori.map(k => ([{ text: `${k.icon || ''} ${k.name}` }]))
+    await setSession(chatId, { step: 'pilih_kategori', type, amount, description, date, kategori, kategoriMap })
     await sendMessage(chatId, '🏷️ Pilih kategori:', keyboard)
     return Response.json({ ok: true })
   }
