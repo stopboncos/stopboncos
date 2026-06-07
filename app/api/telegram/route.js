@@ -49,11 +49,13 @@ async function getSession(chatId) {
 }
 
 async function setSession(chatId, state) {
-  await supabase.from('telegram_sessions').upsert({
+  const { error } = await supabase.from('telegram_sessions').upsert({
     chat_id: String(chatId),
     state,
     updated_at: new Date().toISOString()
   }, { onConflict: 'chat_id' })
+  
+  if (error) console.error('setSession error:', error)
 }
 
 async function clearSession(chatId) {
