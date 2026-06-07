@@ -19,20 +19,43 @@ export default function LoginPage() {
   const [emailFocus, setEmailFocus] = useState(false)
   const [nameFocus, setNameFocus] = useState(false)
 
+
+  const terjemahkanError = (msg) => {
+    if (!msg) return 'Terjadi kesalahan, coba lagi ya 🙏'
+    const m = msg.toLowerCase()
+    if (m.includes('invalid login credentials') || m.includes('invalid credentials'))
+      return 'Email atau password salah. Coba cek lagi ya 😊'
+    if (m.includes('email not confirmed'))
+      return 'Email kamu belum dikonfirmasi. Cek inbox atau folder spam ya!'
+    if (m.includes('user already registered') || m.includes('already registered'))
+      return 'Email ini sudah terdaftar. Coba masuk aja langsung!'
+    if (m.includes('password should be at least'))
+      return 'Password minimal 6 karakter ya.'
+    if (m.includes('unable to validate email address') || m.includes('invalid email'))
+      return 'Format email tidak valid. Cek lagi ya!'
+    if (m.includes('too many requests') || m.includes('rate limit'))
+      return 'Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi 🙏'
+    if (m.includes('network') || m.includes('fetch'))
+      return 'Koneksi bermasalah. Cek internet kamu ya!'
+    if (m.includes('weak password'))
+      return 'Password terlalu lemah. Coba kombinasi huruf dan angka.'
+    return 'Terjadi kesalahan, coba lagi ya 🙏'
+  }
+
   const handleAuth = async () => {
     setLoading(true)
     setError('')
     setSuccessMessage('')
 
     if (!email || !password || (!isLogin && !fullName)) {
-      setError('Semua field wajib diisi.')
+      setError('Semua field wajib diisi ya 😊')
       setLoading(false)
       return
     }
 
     if (isLogin) {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) setError(error.message)
+      if (error) setError(terjemahkanError(error.message))
       else router.push('/dashboard')
     } else {
       const { error } = await supabase.auth.signUp({
@@ -40,7 +63,7 @@ export default function LoginPage() {
         password,
         options: { data: { full_name: fullName } }
       })
-      if (error) setError(error.message)
+      if (error) setError(terjemahkanError(error.message))
       else setSuccessMessage('ok')
     }
     setLoading(false)
@@ -92,7 +115,7 @@ export default function LoginPage() {
 
         {/* Logo */}
         <div style={{ textAlign: 'center', marginBottom: '28px' }}>
-          <img src="/logo.png" alt="Stopboncos" style={{ height: '50px', width: 'auto', margin: 'auto' }} />
+          <img src="/logo.png" alt="Stopboncos" style={{ height: '60px', width: 'auto', margin: 'auto', marginBottom: '8px' }} />
           {/* <p style={{ color: '#8B7FA8', fontSize: '13px', margin: 0, letterSpacing: '0.01em' }}>
             Pencatatan Keuangan Pribadi
           </p> */}

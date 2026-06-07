@@ -7,21 +7,22 @@ const supabase = createClient(
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
-async function sendMessage(chatId, text, keyboard = null) {
+async function sendMessage(chatId, text, keyboard = null, removeKeyboard = false) {
   const payload = { chat_id: chatId, text, parse_mode: 'HTML' }
-  if (keyboard) payload.reply_markup = { inline_keyboard: keyboard }
+  if (keyboard) {
+    payload.reply_markup = {
+      keyboard,
+      one_time_keyboard: true,
+      resize_keyboard: true
+    }
+  }
+  if (removeKeyboard) {
+    payload.reply_markup = { remove_keyboard: true }
+  }
   await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
-  })
-}
-
-async function answerCallback(callbackId) {
-  await fetch(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_query_id: callbackId })
   })
 }
 
@@ -68,78 +69,6 @@ export async function POST(req) {
   }
 
   const message = body?.message
-  const callbackQuery = body?.callback_query
-
-  // ===== HANDLE CALLBACK QUERY (inline keyboard) =====
-  if (callbackQuery) {
-    const chatId = callbackQuery.message.chat.id
-    const data = callbackQuery.data
-    const callbackId = callbackQuery.id
-
-    await answerCallback(callbackId)
-
-    const { data: userData } = await supabase
-      .from('users').select('*').eq('telegram_chat_id', String(chatId)).single()
-    if (!userData) return Response.json({ ok: true })
-
-    const session = await getSession(chatId)
-    if (!session) return Response.json({ ok: true })
-
-    // Pilih kategori
-    if (session.step === 'pilih_kategori' && data.startsWith('kat_')) {
-      const katId = data.replace('kat_', '')
-      const kat = session.kategori.find(k => k.id === katId)
-      if (!kat) return Response.json({ ok: true })
-
-      const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
-      if (!akuns?.length) {
-        await clearSession(chatId)
-        await sendMessage(chatId, '❌ Belum ada dompet. Tambah dompet di Stopboncos dulu.')
-        return Response.json({ ok: true })
-      }
-
-      await setSession(chatId, { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name, akuns })
-
-      const keyboard = akuns.map(a => ([{
-        text: `${a.name} (${fmt(a.balance)})`,
-        callback_data: `akun_${a.id}`
-      }]))
-      await sendMessage(chatId, '💰 Pilih dompet:', keyboard)
-      return Response.json({ ok: true })
-    }
-
-    // Pilih dompet
-    if (session.step === 'pilih_dompet' && data.startsWith('akun_')) {
-      const akunId = data.replace('akun_', '')
-      const akun = session.akuns.find(a => a.id === akunId)
-      if (!akun) return Response.json({ ok: true })
-
-      await supabase.from('transactions').insert({
-        user_id: userData.id,
-        type: session.type,
-        amount: session.amount,
-        account_id: akun.id,
-        category_id: session.category_id,
-        description: session.description,
-        date: session.date,
-        source: 'telegram',
-      })
-
-      const newBalance = session.type === 'income'
-        ? akun.balance + session.amount
-        : akun.balance - session.amount
-      await supabase.from('accounts').update({ balance: newBalance }).eq('id', akun.id)
-      await clearSession(chatId)
-
-      const emoji = session.type === 'income' ? '📈' : '📉'
-      const sign = session.type === 'income' ? '+' : '-'
-      await sendMessage(chatId, `✅ <b>Transaksi tersimpan!</b>\n\n${emoji} ${sign}${fmt(session.amount)}\n📝 ${session.description}\n🏷️ ${session.category_name}\n💰 ${akun.name}\n📅 ${session.date}\n\nSisa saldo ${akun.name}: ${fmt(newBalance)}`)
-      return Response.json({ ok: true })
-    }
-
-    return Response.json({ ok: true })
-  }
-
   if (!message) return Response.json({ ok: true })
 
   const chatId = message.chat.id
@@ -183,6 +112,76 @@ export async function POST(req) {
     return Response.json({ ok: true })
   }
 
+  // ===== CEK SESSION AKTIF =====
+  const session = await getSession(chatId)
+
+  if (session) {
+    // /batal saat session aktif
+    if (text === '/batal') {
+      await clearSession(chatId)
+      await sendMessage(chatId, '❌ Input dibatalkan.', null, true)
+      return Response.json({ ok: true })
+    }
+
+    // Step: pilih kategori
+    if (session.step === 'pilih_kategori') {
+      const kat = session.kategori.find(k => `${k.icon || ''} ${k.name}`.trim() === text.trim() || k.name === text.trim())
+      if (!kat) {
+        await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nama kategori yang tersedia.')
+        return Response.json({ ok: true })
+      }
+
+      const { data: akuns } = await supabase.from('accounts').select('*').eq('user_id', userData.id)
+      if (!akuns?.length) {
+        await clearSession(chatId)
+        await sendMessage(chatId, '❌ Belum ada dompet. Tambah dompet di Stopboncos dulu.', null, true)
+        return Response.json({ ok: true })
+      }
+
+      await setSession(chatId, { ...session, step: 'pilih_dompet', category_id: kat.id, category_name: kat.name, akuns })
+
+      const keyboard = akuns.map(a => ([{ text: `${a.name} (${fmt(a.balance)})` }]))
+      await sendMessage(chatId, '💰 Pilih dompet:', keyboard)
+      return Response.json({ ok: true })
+    }
+
+    // Step: pilih dompet
+    if (session.step === 'pilih_dompet') {
+      const akun = session.akuns.find(a => text.startsWith(a.name))
+      if (!akun) {
+        await sendMessage(chatId, '❌ Pilihan tidak valid. Ketik nama dompet yang tersedia.')
+        return Response.json({ ok: true })
+      }
+
+      await supabase.from('transactions').insert({
+        user_id: userData.id,
+        type: session.type,
+        amount: session.amount,
+        account_id: akun.id,
+        category_id: session.category_id,
+        description: session.description,
+        date: session.date,
+        source: 'telegram',
+      })
+
+      const newBalance = session.type === 'income'
+        ? akun.balance + session.amount
+        : akun.balance - session.amount
+      await supabase.from('accounts').update({ balance: newBalance }).eq('id', akun.id)
+      await clearSession(chatId)
+
+      const emoji = session.type === 'income' ? '📈' : '📉'
+      const sign = session.type === 'income' ? '+' : '-'
+      await sendMessage(
+        chatId,
+        `✅ <b>Transaksi tersimpan!</b>\n\n${emoji} ${sign}${fmt(session.amount)}\n📝 ${session.description}\n🏷️ ${session.category_name}\n💰 ${akun.name}\n📅 ${session.date}\n\nSisa saldo ${akun.name}: ${fmt(newBalance)}`,
+        null, true
+      )
+      return Response.json({ ok: true })
+    }
+  }
+
+  // ===== COMMAND BARU =====
   const parts = text.split(/\s+/)
   const command = parts[0].toLowerCase()
 
@@ -213,10 +212,7 @@ export async function POST(req) {
 
     await setSession(chatId, { step: 'pilih_kategori', type, amount, description, date, kategori })
 
-    const keyboard = kategori.map(k => ([{
-      text: `${k.icon || ''} ${k.name}`,
-      callback_data: `kat_${k.id}`
-    }]))
+    const keyboard = kategori.map(k => ([{ text: `${k.icon || ''} ${k.name}` }]))
     await sendMessage(chatId, '🏷️ Pilih kategori:', keyboard)
     return Response.json({ ok: true })
   }
@@ -282,7 +278,7 @@ export async function POST(req) {
   // /batal
   if (command === '/batal') {
     await clearSession(chatId)
-    await sendMessage(chatId, '❌ Input dibatalkan.')
+    await sendMessage(chatId, '❌ Input dibatalkan.', null, true)
     return Response.json({ ok: true })
   }
 
