@@ -10,6 +10,17 @@ const manrope = Manrope({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: "Stopboncos - Pencatatan Keuangan Pribadi",
   description: "Aplikasi pencatatan keuangan pribadi dengan sistem target kuota",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Stopboncos",
+  },
+  icons: {
+    icon: "/icons/icon-192x192.png",
+    apple: "/icons/apple-touch-icon.png",
+  },
+  themeColor: "#f97316",
 };
 
 export default function RootLayout({
