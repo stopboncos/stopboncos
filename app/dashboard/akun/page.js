@@ -127,19 +127,44 @@ export default function AkunPage() {
     setLoading(false)
   }
 
+  // ✅ FIX: Hitung net change dengan benar termasuk transaksi transfer
   const fetchNetChanges = async (accounts) => {
     if (!accounts.length) return
     const ids = accounts.map(a => a.id)
-    const { data } = await supabase
+
+    // Ambil semua transaksi yang melibatkan akun-akun ini (sebagai sumber ATAU tujuan)
+    const { data: asSumber } = await supabase
       .from('transactions')
-      .select('account_id, type, amount')
+      .select('account_id, account_to_id, type, amount')
       .in('account_id', ids)
+
+    const { data: asTujuan } = await supabase
+      .from('transactions')
+      .select('account_id, account_to_id, type, amount')
+      .in('account_to_id', ids)
+
     const changes = {}
     ids.forEach(id => { changes[id] = 0 })
-    ;(data || []).forEach(tx => {
-      if (tx.type === 'income') changes[tx.account_id] = (changes[tx.account_id] || 0) + tx.amount
-      else if (tx.type === 'expense') changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
+
+    // Transaksi di mana akun adalah account_id (sumber/pemilik utama)
+    ;(asSumber || []).forEach(tx => {
+      if (tx.type === 'income') {
+        changes[tx.account_id] = (changes[tx.account_id] || 0) + tx.amount
+      } else if (tx.type === 'expense') {
+        changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
+      } else if (tx.type === 'transfer') {
+        // account_id = sumber transfer → saldo berkurang
+        changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
+      }
     })
+
+    // Transaksi transfer di mana akun adalah account_to_id (tujuan transfer) → saldo bertambah
+    ;(asTujuan || []).forEach(tx => {
+      if (tx.type === 'transfer' && tx.account_to_id && ids.includes(tx.account_to_id)) {
+        changes[tx.account_to_id] = (changes[tx.account_to_id] || 0) + tx.amount
+      }
+    })
+
     setNetChanges(changes)
   }
 
@@ -203,7 +228,7 @@ export default function AkunPage() {
     fetchAkun()
   }
 
-  // --- Top-up Saldo ---
+  // --- Top-up / Transfer Saldo ---
   const openTopup = (akun) => {
     setTopupTarget(akun)
     setTopupForm({ jumlah: '', sumber: '', catatan: '', tanggal: getLocalDate() })
@@ -211,31 +236,71 @@ export default function AkunPage() {
     setShowTopupModal(true)
   }
 
+  // handleTopup — khusus transfer antar dompet
   const handleTopup = async () => {
     if (!topupForm.jumlah || isNaN(topupForm.jumlah) || parseFloat(topupForm.jumlah) <= 0) {
       setTopupError('Jumlah harus diisi dan lebih dari 0'); return
     }
-    setTopupSaving(true); setTopupError('')
-    const jumlah = parseFloat(topupForm.jumlah)
-    const newBalance = (topupTarget.balance || 0) + jumlah
-    const { error: err1 } = await supabase.from('accounts').update({ balance: newBalance }).eq('id', topupTarget.id)
-    if (err1) { setTopupError(err1.message); setTopupSaving(false); return }
-    // Bangun timestamp lokal WITA: ambil tanggal dari form, jam 12 siang biar aman
-    const [yy, mo, dd] = topupForm.tanggal.split('-').map(Number)
-    const localTs = new Date(yy, mo - 1, dd, 12, 0, 0)
-    // Format ke ISO dengan offset +08:00
-    const pad = n => String(n).padStart(2, '0')
-    const tzOffset = '+08:00'
-    const isoDate = `${yy}-${pad(mo)}-${pad(dd)}T12:00:00${tzOffset}`
-
-    const txPayload = {
-      user_id: userId, account_id: topupTarget.id, type: 'income',
-      amount: jumlah, category_id: null,
-      notes: topupForm.catatan || 'Top-up saldo', date: isoDate,
+    if (!topupForm.sumber) {
+      setTopupError('Pilih dompet asal terlebih dahulu'); return
     }
-    if (topupForm.sumber) txPayload.from_account_id = topupForm.sumber
-    await supabase.from('transactions').insert(txPayload)
-    await logActivity(userId, 'akun', topupTarget.id, 'topup', { balance: topupTarget.balance }, { balance: newBalance, jumlah })
+    setTopupSaving(true); setTopupError('')
+
+    const jumlah = parseFloat(topupForm.jumlah)
+
+    // Format tanggal ISO dengan offset WITA +08:00
+    const [yy, mo, dd] = topupForm.tanggal.split('-').map(Number)
+    const pad = n => String(n).padStart(2, '0')
+    const isoDate = `${yy}-${pad(mo)}-${pad(dd)}T12:00:00+08:00`
+
+    {
+      // Transfer antar dompet
+      // Cari dompet sumber
+      const sumberAkun = akuns.find(a => a.id === topupForm.sumber)
+      if (!sumberAkun) { setTopupError('Dompet sumber tidak ditemukan'); setTopupSaving(false); return }
+
+      // Cek saldo sumber cukup
+      if ((sumberAkun.balance || 0) < jumlah) {
+        setTopupError(`Saldo ${sumberAkun.name} tidak cukup (${fmt(sumberAkun.balance)})`);
+        setTopupSaving(false); return
+      }
+
+      // 1) Kurangi saldo dompet SUMBER
+      const { error: errSumber } = await supabase
+        .from('accounts')
+        .update({ balance: (sumberAkun.balance || 0) - jumlah })
+        .eq('id', topupForm.sumber)
+      if (errSumber) { setTopupError(errSumber.message); setTopupSaving(false); return }
+
+      // 2) Tambah saldo dompet TUJUAN
+      const { error: errTujuan } = await supabase
+        .from('accounts')
+        .update({ balance: (topupTarget.balance || 0) + jumlah })
+        .eq('id', topupTarget.id)
+      if (errTujuan) { setTopupError(errTujuan.message); setTopupSaving(false); return }
+
+      // 3) Catat 1 transaksi tipe 'transfer'
+      //    account_id   = sumber (yang berkurang)
+      //    account_to_id = tujuan (yang bertambah)
+      const { error: errTx } = await supabase.from('transactions').insert({
+        user_id: userId,
+        account_id: topupForm.sumber,          // sumber
+        account_to_id: topupTarget.id,         // tujuan
+        type: 'transfer',
+        amount: jumlah,
+        category_id: null,
+        description: topupForm.catatan || `Transfer ke ${topupTarget.name}`,
+        date: isoDate,
+      })
+      if (errTx) { setTopupError(errTx.message); setTopupSaving(false); return }
+
+      await logActivity(userId, 'akun', topupTarget.id, 'transfer',
+        { from: sumberAkun.name, balance_sumber: sumberAkun.balance },
+        { to: topupTarget.name, balance_tujuan: topupTarget.balance, jumlah }
+      )
+
+    }
+
     setShowTopupModal(false)
     fetchAkun()
     setTopupSaving(false)
@@ -243,7 +308,7 @@ export default function AkunPage() {
 
   const inputStyle = {
     width: '100%', padding: '9px 12px', border: '1px solid var(--border)',
-    borderRadius: '8px', fontSize: '14px', background: 'var(--bg)',
+    borderRadius: '8px', fontSize: '14px', background: 'var(--bg-card)',
     color: 'var(--text)', boxSizing: 'border-box',
   }
 
@@ -251,7 +316,7 @@ export default function AkunPage() {
 
   return (
     <div style={{ width: '100%', maxWidth: '560px', margin: '0 auto', boxSizing: 'border-box' }}>
-      {/* Header — hanya judul + total saldo, tanpa tombol kanan atas */}
+      {/* Header */}
       <div style={{ marginBottom: '20px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', margin: '0 0 4px' }}>Akun Dompet</h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
@@ -267,7 +332,6 @@ export default function AkunPage() {
           {akuns.map(akun => {
             const net = netChanges[akun.id] ?? 0
             const isPositive = net >= 0
-            // initial balance = current balance minus net tx change
             const initialBal = akun.initial_balance ?? (akun.balance - net)
             return (
               <div key={akun.id} style={{
@@ -281,7 +345,6 @@ export default function AkunPage() {
               }}>
                 {/* Row 1: icon + name/type + notes pill + edit + delete */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  {/* Icon */}
                   <div style={{
                     width: '40px', height: '40px', borderRadius: '50%',
                     background: akun.color + '18',
@@ -290,16 +353,13 @@ export default function AkunPage() {
                   }}>
                     {getIcon(akun.type, akun.color)}
                   </div>
-                  {/* Name + type */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: '700', fontSize: '14px', color: 'var(--text)', lineHeight: '1.2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{akun.name}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>{akun.type}</div>
                   </div>
-                  {/* Notes pill (kiri tombol edit) */}
                   {akun.notes && (
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: '5px', padding: '3px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', flexShrink: 1 }}>{akun.notes}</div>
                   )}
-                  {/* Actions */}
                   <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
                     <button onClick={() => openEdit(akun)} title="Edit" style={{ background: 'none', border: 'none', padding: '6px', cursor: 'pointer', color: 'var(--text-muted)', borderRadius: '6px', display: 'flex', alignItems: 'center' }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -320,12 +380,10 @@ export default function AkunPage() {
 
                 {/* Row 2: saldo + tombol tambah saldo */}
                 <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '12px' }}>
-                  {/* Kiri: saldo besar */}
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text)', letterSpacing: '-0.3px', lineHeight: '1.1' }}>{fmt(akun.balance)}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Saldo saat ini</div>
                   </div>
-                  {/* Kanan: tombol tambah saldo */}
                   <button
                     onClick={() => openTopup(akun)}
                     style={{
@@ -354,7 +412,7 @@ export default function AkunPage() {
                 {/* Divider */}
                 <div style={{ height: '1px', background: 'var(--border)' }} />
 
-                {/* Row 3: Awal & Perubahan — dua baris terpisah */}
+                {/* Row 3: Awal & Perubahan */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Awal</span>
@@ -376,7 +434,7 @@ export default function AkunPage() {
             )
           })}
 
-          {/* Tombol Buat Dompet Baru di bawah list */}
+          {/* Tombol Buat Dompet Baru */}
           <button
             onClick={() => { setForm({ name: '', type: 'Rekening Bank', balance: '', color: '#5B5F97', notes: '' }); setError(''); setShowModal(true) }}
             style={{
@@ -459,7 +517,7 @@ export default function AkunPage() {
         </ModalWrapper>
       )}
 
-      {/* ===== Modal Top-up Saldo ===== */}
+      {/* ===== Modal Top-up / Transfer Saldo ===== */}
       {showTopupModal && topupTarget && (
         <ModalWrapper onClose={() => setShowTopupModal(false)}>
           <ModalHeader title={`Tambah Saldo — ${topupTarget.name}`} onClose={() => setShowTopupModal(false)} />
@@ -467,21 +525,33 @@ export default function AkunPage() {
           <Field label="Jumlah (Rp) *">
             <input type="number" value={topupForm.jumlah} onChange={e => setTopupForm({ ...topupForm, jumlah: e.target.value })} placeholder="0" style={inputStyle} />
           </Field>
-          <Field label="Sumber Dana">
+
+          <Field label="Dompet Asal *">
             <select value={topupForm.sumber} onChange={e => setTopupForm({ ...topupForm, sumber: e.target.value })} style={inputStyle}>
-              <option value="">— Pilih sumber (opsional) —</option>
+              <option value="">Pilih dompet asal</option>
               {akuns.filter(a => a.id !== topupTarget.id).map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
+                <option key={a.id} value={a.id}>{a.name} ({fmt(a.balance)})</option>
               ))}
             </select>
+            {topupForm.sumber && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                Saldo {akuns.find(a => a.id === topupForm.sumber)?.name} akan berkurang
+              </div>
+            )}
           </Field>
-          <Field label="Catatan Transaksi (opsional)">
-            <input value={topupForm.catatan} onChange={e => setTopupForm({ ...topupForm, catatan: e.target.value })} placeholder="mis. Gaji bulan ini" style={inputStyle} />
+
+          <Field label="Catatan (opsional)">
+            <input value={topupForm.catatan} onChange={e => setTopupForm({ ...topupForm, catatan: e.target.value })} placeholder={`Transfer ke ${topupTarget.name}`} style={inputStyle} />
           </Field>
           <Field label="Tanggal">
             <input type="date" value={topupForm.tanggal} onChange={e => setTopupForm({ ...topupForm, tanggal: e.target.value })} style={inputStyle} />
           </Field>
-          <ModalFooter onCancel={() => setShowTopupModal(false)} onSave={handleTopup} saving={topupSaving} saveLabel="Tambah Saldo" />
+          <ModalFooter
+            onCancel={() => setShowTopupModal(false)}
+            onSave={handleTopup}
+            saving={topupSaving}
+            saveLabel="Transfer Sekarang"
+          />
         </ModalWrapper>
       )}
     </div>
@@ -543,9 +613,9 @@ function ModalHeader({ title, onClose }) {
 
 function ModalFooter({ onCancel, onSave, saving, saveLabel }) {
   return (
-    <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
-      <button onClick={onCancel} style={{ padding: '9px 18px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '13.5px', cursor: 'pointer' }}>Batal</button>
-      <button onClick={onSave} disabled={saving} style={{ padding: '9px 18px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+    <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+      <button onClick={onCancel} style={{ flex: 1, padding: '13px', background: 'var(--primary-light)', color: 'var(--primary)', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Batal</button>
+      <button onClick={onSave} disabled={saving} style={{ flex: 2, padding: '13px', background: saving ? '#ccc' : '#F97316', color: 'white', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer', transition: 'background 0.2s' }}>
         {saving ? 'Menyimpan...' : saveLabel}
       </button>
     </div>

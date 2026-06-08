@@ -5,20 +5,14 @@ import { supabase } from '@/lib/supabase'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { IconPicker, findGroupForIcon } from '@/components/IconPicker'
+import TransaksiModal from '@/components/TransaksiModal'
 import { 
   LayoutDashboard, ArrowLeftRight, FileText, 
   Star, User, Settings, ChevronDown,
-  Sun, Moon, LogOut, Menu
+  Sun, Moon, LogOut, Home, Target, Plus, Banknote
 } from 'lucide-react'
 
 
-// const menuItems = [
-//   { href: '/dashboard', label: 'Dashboard', icon: '📊' },
-//   { href: '/dashboard/transaksi', label: 'Transaksi', icon: '💸' },
-//   { href: '/dashboard/laporan', label: 'Laporan Bulanan', icon: '📋' },
-//   { href: '/dashboard/langganan', label: 'Langganan', icon: '⭐' },
-//   { href: '/dashboard/profil', label: 'Profil', icon: '👤' },
-// ]
 const menuItems = [
   { href: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={16} /> },
   { href: '/dashboard/transaksi', label: 'Transaksi', icon: <ArrowLeftRight size={16} /> },
@@ -50,6 +44,15 @@ const defaultDetailText = {
   '/dashboard/akun': { icon: '👛', text: 'Pilih akun untuk melihat detail' },
   '/dashboard/kategori': { icon: '🏷️', text: 'Pilih kategori untuk melihat detail' },
 }
+
+// Bottom nav items (mobile)
+const bottomNavItems = [
+  { href: '/dashboard', label: 'Beranda', icon: Home },
+  { href: '/dashboard/target', label: 'Target', icon: Target },
+  { href: null, label: '+', icon: Plus, isAdd: true },
+  { href: '/dashboard/transaksi', label: 'Transaksi', icon: Banknote },
+  { href: '/dashboard/profil', label: 'Profil', icon: User },
+]
 
 function DetailPanel({ pathname, detailId }) {
   const basePath = detailPages.find(p => pathname.startsWith(p)) || null
@@ -125,7 +128,7 @@ function DetailContent({ basePath, detailId }) {
         type: tx.type,
         amount: String(tx.amount),
         account_id: tx.account_id || '',
-        account_to_id: tx.account_to_id || '',  // ← tambah ini
+        account_to_id: tx.account_to_id || '',
         category_id: tx.category_id || '',
         description: tx.description || '',
         date: tx.date,
@@ -143,7 +146,7 @@ function DetailContent({ basePath, detailId }) {
       const { data: kat } = await supabase.from('categories').select('*').eq('id', detailId).single()
       result = kat
       if (kat) setForm({ name: kat.name, type: kat.type, icon: kat.icon || '', color: kat.color || '' })
-      setOpenGroup(findGroupForIcon(kat.icon || '🍽️'))  // ← tambah ini
+      setOpenGroup(findGroupForIcon(kat.icon || '🍽️'))
       const { count: kc } = await supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
@@ -173,7 +176,6 @@ function DetailContent({ basePath, detailId }) {
   const handleSave = async () => {
     setSaving(true)
     if (basePath === '/dashboard/transaksi' || basePath === '/dashboard/laporan') {
-      // Revert balance asal lama
       const { data: akunLama } = await supabase.from('accounts').select('*').eq('id', data.account_id).single()
       if (akunLama) {
         let reverted = akunLama.balance
@@ -182,14 +184,12 @@ function DetailContent({ basePath, detailId }) {
         else if (data.type === 'transfer') reverted += data.amount
         await supabase.from('accounts').update({ balance: reverted }).eq('id', akunLama.id)
       }
-      // Revert balance tujuan lama (kalau transfer)
       if (data.type === 'transfer' && data.account_to_id) {
         const { data: akunTujuanLama } = await supabase.from('accounts').select('*').eq('id', data.account_to_id).single()
         if (akunTujuanLama) {
           await supabase.from('accounts').update({ balance: akunTujuanLama.balance - data.amount }).eq('id', akunTujuanLama.id)
         }
       }
-      // Update transaksi
       await supabase.from('transactions').update({
         type: form.type, amount: parseFloat(form.amount),
         account_id: form.account_id,
@@ -197,7 +197,6 @@ function DetailContent({ basePath, detailId }) {
         category_id: form.type === 'transfer' ? null : (form.category_id || null),
         description: form.description, date: form.date,
       }).eq('id', detailId)
-      // Apply balance baru — refresh dulu setelah revert
       const { data: freshAkuns } = await supabase.from('accounts').select('*')
       const fa = freshAkuns || []
       const akunBaru = fa.find(a => a.id === form.account_id)
@@ -513,7 +512,7 @@ function DetailContent({ basePath, detailId }) {
     )
   }
 
-  // Target detail — edit & hapus di kolom 3
+  // Target detail
   if (basePath === '/dashboard/target') {
     const PERIODE = ['Bulanan', 'Mingguan', 'Tahunan']
     return (
@@ -529,19 +528,16 @@ function DetailContent({ basePath, detailId }) {
 
         {editMode ? (
           <>
-            {/* Kategori */}
             <div style={{ marginBottom: '14px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Kategori</div>
               <select value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })} style={inputStyle}>
                 {kategori.map(k => <option key={k.id} value={k.id}>{k.icon} {k.name}</option>)}
               </select>
             </div>
-            {/* Kuota */}
             <div style={{ marginBottom: '14px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Kuota Maksimal (Rp)</div>
               <input type="number" value={form.quota} onChange={e => setForm({ ...form, quota: e.target.value })} style={inputStyle} />
             </div>
-            {/* Periode & Mulai */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
               <div>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Periode</div>
@@ -554,7 +550,6 @@ function DetailContent({ basePath, detailId }) {
                 <input type="month" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} style={inputStyle} />
               </div>
             </div>
-            {/* Warning */}
             <div style={{ marginBottom: '14px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Peringatan di — {form.warning_pct}%</div>
               <input type="range" min="50" max="95" step="5" value={form.warning_pct}
@@ -590,6 +585,9 @@ function DashboardLayoutInner({ children }) {
     if (typeof window === 'undefined') return false
     return localStorage.getItem('konfOpen') === 'true'
   })
+
+  // State untuk TransaksiModal di bottom nav
+  const [addModalOpen, setAddModalOpen] = useState(false)
 
   const toggleKonf = () => {
     const next = !konfOpen
@@ -639,10 +637,12 @@ function DashboardLayoutInner({ children }) {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
+      {/* Overlay sidebar mobile */}
       {isMobile && sidebarOpen && (
         <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 99 }} />
       )}
 
+      {/* Sidebar (desktop always visible, mobile slide-in) */}
       <nav style={{
         width: '240px', background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)',
         display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0,
@@ -721,6 +721,7 @@ function DashboardLayoutInner({ children }) {
             )
           })}
         </div>
+
         <div style={{ padding: '12px 10px', borderTop: '1px solid var(--sidebar-border)' }}>
           <div onClick={toggleTheme} style={{
             display: 'flex', alignItems: 'center', gap: '10px',
@@ -749,20 +750,12 @@ function DashboardLayoutInner({ children }) {
         </div>
       </nav>
 
+      {/* Main content area */}
       <div style={{ marginLeft: isMobile ? '0' : '240px', flex: 1, display: 'flex', height: '100vh', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
-        {isMobile && (
-          <button onClick={() => setSidebarOpen(true)} style={{
-            position: 'fixed', bottom: '24px', right: '24px',
-            width: '48px', height: '48px', background: 'var(--primary)', color: 'white',
-            border: 'none', borderRadius: '25%', fontSize: '30px', lineHeight: 1, cursor: 'pointer',
-            zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', paddingBottom: '5px',
-          }}>☰</button>
-        )}
         <div style={{
           flex: hasDetailCol ? '0 0 auto' : 1,
           width: hasDetailCol ? 'calc(100% - 640px)' : '100%',
-          padding: isMobile ? '16px' : '28px',
+          padding: isMobile ? '16px 16px 80px' : '28px', // padding bawah lebih besar di mobile untuk navbar
           minWidth: 0,
           borderRight: hasDetailCol ? '1px solid var(--border)' : 'none',
           overflowY: 'auto', height: '100vh',
@@ -775,6 +768,82 @@ function DashboardLayoutInner({ children }) {
           </div>
         )}
       </div>
+
+      {/* Bottom Navbar — mobile only */}
+      {isMobile && (
+        <>
+          {/* Modal tambah transaksi */}
+          <TransaksiModal
+            isOpen={addModalOpen}
+            onClose={() => setAddModalOpen(false)}
+            onSaved={() => {
+              window.dispatchEvent(new Event('refetch-transaksi'))
+            }}
+          />
+
+          <nav style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0,
+            background: 'var(--bg)',
+            // borderTop: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center',
+            height: '64px',
+            zIndex: 50,
+            paddingBottom: 'env(safe-area-inset-bottom)',
+          }}>
+            {bottomNavItems.map((item, i) => {
+              if (item.isAdd) {
+                return (
+                  <div key="add" style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    <button
+                      onClick={() => setAddModalOpen(true)}
+                      style={{
+                        width: '52px', height: '52px',
+                        borderRadius: '50%',
+                        background: '#F97316',
+                        border: 'none',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 14px rgba(249,115,22,0.4)',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      <Plus size={24} color="white" strokeWidth={2.5} />
+                    </button>
+                  </div>
+                )
+              }
+
+              const Icon = item.icon
+              const isActive = item.href === '/dashboard'
+                ? pathname === '/dashboard'
+                : pathname === item.href || pathname.startsWith(item.href + '/')
+
+              return (
+                <div
+                  key={item.href}
+                  onClick={() => router.push(item.href)}
+                  style={{
+                    flex: 1, display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    gap: '3px', cursor: 'pointer',
+                    paddingTop: '6px',
+                    color: isActive ? '#F97316' : 'var(--text-muted)',
+                  }}
+                >
+                  <Icon size={20} strokeWidth={isActive ? 2.5 : 1.8} />
+                  <span style={{
+                    fontSize: '10px',
+                    fontWeight: isActive ? '700' : '400',
+                    letterSpacing: '0.01em',
+                  }}>
+                    {item.label}
+                  </span>
+                </div>
+              )
+            })}
+          </nav>
+        </>
+      )}
     </div>
   )
 }

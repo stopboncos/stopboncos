@@ -30,7 +30,6 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
   const [saving, setSaving] = useState(false)
   const [visible, setVisible] = useState(false)
 
-  // Animasi masuk
   useEffect(() => {
     if (isOpen) {
       requestAnimationFrame(() => setVisible(true))
@@ -82,14 +81,10 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
   const inputStyle = {
     width: '100%', padding: '11px 14px',
     border: '1px solid var(--border)', borderRadius: '10px',
-    fontSize: '14px', background: 'var(--bg)', color: 'var(--text)',
+    fontSize: '14px', background: 'var(--bg-card)', color: 'var(--text)',
     outline: 'none', boxSizing: 'border-box', appearance: 'none',
     WebkitAppearance: 'none',
   }
-
-  const filteredCategories = categories.filter(c =>
-    form.type === 'transfer' ? true : (c.type === form.type || !c.type)
-  )
 
   return (
     <div
@@ -148,7 +143,7 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
           />
         </div>
 
-        {/* Dokumen / Metode */}
+        {/* Akun */}
         <div style={{ marginBottom: '14px' }}>
           <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
             Dokumen / Metode <span style={{ color: 'var(--danger)' }}>*</span>
@@ -215,10 +210,10 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={close} style={{
             flex: 1, padding: '13px',
-            borderRadius: '99px',
+            borderRadius: '10px',
             border: 'none',
-            background: '#7C3AED22',
-            color: '#7C3AED',
+            background: 'var(--primary-light)',
+            color: 'var(--primary)',
             fontSize: '14px', fontWeight: '600', cursor: 'pointer',
           }}>
             Batal
@@ -228,7 +223,7 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
             disabled={saving || !form.amount || !form.account_id}
             style={{
               flex: 2, padding: '13px',
-              borderRadius: '99px',
+              borderRadius: '10px',
               border: 'none',
               background: saving || !form.amount || !form.account_id ? '#ccc' : '#F97316',
               color: 'white',
@@ -255,23 +250,19 @@ export default function TransaksiPage() {
   const [isMobile, setIsMobile] = useState(false)
   const [totalBulanIni, setTotalBulanIni] = useState(0)
 
-  // Modal state
   const [modalOpen, setModalOpen] = useState(false)
   const [editData, setEditData] = useState(null)
 
-  // Filter state
   const [filterWaktu, setFilterWaktu] = useState(null)
   const [filterDompet, setFilterDompet] = useState(null)
   const [filterTipe, setFilterTipe] = useState(null)
   const [filterKategori, setFilterKategori] = useState(null)
 
-  // Picker state
   const [openPicker, setOpenPicker] = useState(null)
   const [pickerVisible, setPickerVisible] = useState(false)
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
 
-  // Temp state untuk list picker
   const [tempDompet, setTempDompet] = useState(null)
   const [tempTipe, setTempTipe] = useState(null)
   const [tempKategori, setTempKategori] = useState(null)
@@ -454,9 +445,30 @@ export default function TransaksiPage() {
     fetchingRef.current = false
   }
 
-  const handleDelete = async (id) => {
+  // ✅ FIX: Hapus transfer → kembalikan saldo kedua dompet
+  const handleDelete = async (tx) => {
     if (!confirm('Hapus transaksi ini?')) return
-    await supabase.from('transactions').delete().eq('id', id)
+
+    if (tx.type === 'transfer' && tx.account_id && tx.account_to_id) {
+      // Ambil saldo terkini kedua akun
+      const { data: akuns } = await supabase
+        .from('accounts')
+        .select('id, balance')
+        .in('id', [tx.account_id, tx.account_to_id])
+
+      if (akuns && akuns.length === 2) {
+        const sumber = akuns.find(a => a.id === tx.account_id)
+        const tujuan = akuns.find(a => a.id === tx.account_to_id)
+
+        // Kembalikan: sumber +amount, tujuan -amount
+        await Promise.all([
+          supabase.from('accounts').update({ balance: (sumber.balance || 0) + tx.amount }).eq('id', sumber.id),
+          supabase.from('accounts').update({ balance: (tujuan.balance || 0) - tx.amount }).eq('id', tujuan.id),
+        ])
+      }
+    }
+
+    await supabase.from('transactions').delete().eq('id', tx.id)
     resetAndFetch()
     fetchTotalBulanIni()
   }
@@ -484,8 +496,10 @@ export default function TransaksiPage() {
   const groupByDate = (list) => {
     const groups = {}
     list.forEach(tx => {
-      if (!groups[tx.date]) groups[tx.date] = []
-      groups[tx.date].push(tx)
+      // Ambil tanggal dari field date (string YYYY-MM-DD atau ISO)
+      const dateKey = (tx.date || '').substring(0, 10)
+      if (!groups[dateKey]) groups[dateKey] = []
+      groups[dateKey].push(tx)
     })
     return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]))
   }
@@ -500,9 +514,11 @@ export default function TransaksiPage() {
   }
 
   const getAmountColor = (tx) => tx.type === 'transfer' ? 'var(--text-muted)' : tx.type === 'income' ? '#16a34a' : 'var(--danger)'
-  const getAmountPrefix = (tx) => tx.type === 'transfer' ? '' : tx.type === 'income' ? '+' : '−'
+  const getAmountPrefix = (tx) => tx.type === 'transfer' ? '↔ ' : tx.type === 'income' ? '+' : '−'
+
+  const getDescription = (tx) => tx.description || '(Tanpa keterangan)'
   const getSubtitle = (tx) => tx.type === 'transfer'
-    ? `${tx.accounts?.name} → ${tx.account_to?.name || 'Dompet tujuan'}`
+    ? `${tx.accounts?.name} → ${tx.account_to?.name || '?'}`
     : `${tx.accounts?.name} · ${tx.categories?.name || '-'}`
   const getIcon = (tx) => tx.type === 'transfer' ? '🔄' : (tx.categories?.icon || '💸')
   const getIconBg = (tx) => tx.type === 'transfer' ? '#5B5F9722' : ((tx.categories?.color || '#5B5F97') + '22')
@@ -745,7 +761,7 @@ export default function TransaksiPage() {
                         <div style={{ width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0, background: getIconBg(tx), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '17px' }}>{getIcon(tx)}</div>
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontWeight: '500', fontSize: '13px', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {tx.description || '(Tanpa keterangan)'}
+                            {getDescription(tx)}
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
                             <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{getSubtitle(tx)}</span>
@@ -763,7 +779,7 @@ export default function TransaksiPage() {
                           <Pencil size={13} />
                         </button>
                         <button className="action-btn-mobile"
-                          onClick={(e) => { e.stopPropagation(); handleDelete(tx.id) }}
+                          onClick={(e) => { e.stopPropagation(); handleDelete(tx) }}
                           style={{ background: 'var(--danger-light)', color: 'var(--danger)', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', flexShrink: 0 }}>
                           <Trash2 size={13} />
                         </button>

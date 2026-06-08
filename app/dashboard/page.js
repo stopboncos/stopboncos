@@ -4,6 +4,14 @@ export const dynamic = 'force-dynamic'
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import {
+  ScanLine,
+  Wallet,
+  LayoutGrid,
+  FileText,
+  DatabaseBackup,
+  ClipboardList,
+} from 'lucide-react'
 
 export default function DashboardPage() {
   const [user, setUser] = useState(null)
@@ -17,13 +25,14 @@ export default function DashboardPage() {
   const [targets, setTargets] = useState([])
   const [dailyTarget, setDailyTarget] = useState(null)
   const [dailyData, setDailyData] = useState([])
+  const [todayExpense, setTodayExpense] = useState(0)
   const [loading, setLoading] = useState(true)
   const [periodeLabel, setPeriodeLabel] = useState('')
 
   const CHART_HEIGHT = 60
   const BAR_WIDTH = 46
   const GAP = 10
-  const DASH_RATIO = 0.3 // dashed line 30% dari atas = 70% dari bawah
+  const DASH_RATIO = 0.3
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user))
@@ -68,10 +77,15 @@ export default function DashboardPage() {
         .filter(t => t.type === 'expense' && t.date >= startOfMonth && t.date <= endOfMonthStr)
         .reduce((s, t) => s + Number(t.amount), 0)
 
+      // Pengeluaran hari ini
+      const todayTotal = txs
+        .filter(t => t.type === 'expense' && t.date === todayStr)
+        .reduce((s, t) => s + Number(t.amount), 0)
+      setTodayExpense(todayTotal)
+
       const periode = `${new Date(startOfMonth).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })} - ${endOfMonth.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}`
       setPeriodeLabel(periode)
 
-      // 15 hari: 14 hari lalu + hari ini + 1 hari ke depan (besok)
       const days = []
       for (let i = 29; i >= -1; i--) {
         const d = new Date(today)
@@ -93,7 +107,6 @@ export default function DashboardPage() {
       setDailyData(days)
       setDailyTarget(dt || null)
 
-
       const targetWithProgress = (tgts || []).map(target => {
         const spent = txs
           .filter(t => t.type === 'expense' && t.category_id === target.category_id && t.date >= startOfMonth)
@@ -112,13 +125,10 @@ export default function DashboardPage() {
     fetchStats()
   }, [])
 
-  // Scroll ke posisi hari ini kedua dari kanan (besok di paling kanan)
   useEffect(() => {
     if (!chartRef.current || dailyData.length === 0) return
     const todayIdx = dailyData.findIndex(d => d.isToday)
     if (todayIdx < 0) return
-    // Hari ini di kedua dari kanan, besok di paling kanan
-    // Scroll agar todayIdx berada di posisi (visible - 2) dari kiri
     setTimeout(() => {
       if (!chartRef.current) return
       const containerWidth = chartRef.current.offsetWidth
@@ -138,17 +148,6 @@ export default function DashboardPage() {
     return String(n)
   }
 
-  const getBarHeight = (total, quota) => {
-    if (total === 0) return 0
-    const dashLineH = CHART_HEIGHT * (1 - DASH_RATIO) // tinggi dari bawah ke dashed line
-    if (!quota) {
-      // Tidak ada target, pakai maxDaily sebagai acuan
-      return Math.min(CHART_HEIGHT, Math.max(8, total))
-    }
-    const h = (total / quota) * dashLineH
-    return Math.min(CHART_HEIGHT, Math.max(8, h))
-  }
-
   const getBarColor = (total, dt) => {
     if (total === 0) return null
     if (!dt) return 'var(--secondary)'
@@ -166,16 +165,15 @@ export default function DashboardPage() {
     return '#22C55E'
   }
 
-  // Recalculate bar heights using maxDaily fallback when no dailyTarget
   const maxDaily = dailyTarget
-    ? dailyTarget.quota // acuan dari target
+    ? dailyTarget.quota
     : Math.max(...dailyData.map(d => d.total), 1)
 
   const calcBarH = (total) => {
     if (total === 0) return 0
-    const dashLineH = CHART_HEIGHT * (1 - DASH_RATIO) // 42px
+    const dashLineH = CHART_HEIGHT * (1 - DASH_RATIO)
     const h = (total / maxDaily) * dashLineH
-    return Math.min(dashLineH * 1.5, Math.max(12, h)) // cap 63px = 42 + 50%
+    return Math.min(dashLineH * 1.5, Math.max(12, h))
   }
 
   const skeletonStyle = {
@@ -191,6 +189,15 @@ export default function DashboardPage() {
     { label: 'Target Lewat', value: stats.targetLewat + ' kategori', icon: '🎯', bg: 'var(--accent-light)', change: '', changeColor: '' },
   ]
 
+  const menuItems = [
+    { label: 'Scanner', icon: ScanLine, color: '#E8E8F4', iconColor: '#5b5f97', route: '/dashboard/scanner', soon: true },
+    { label: 'Dompet', icon: Wallet, color: '#EDE9FE', iconColor: '#7C3AED', route: '/dashboard/akun', soon: false },
+    { label: 'Kategori', icon: LayoutGrid, color: '#FCE7F3', iconColor: '#DB2777', route: '/dashboard/kategori', soon: false },
+    { label: 'Laporan', icon: FileText, color: '#FEF9C3', iconColor: '#CA8A04', route: '/dashboard/laporan', soon: false },
+    { label: 'Backup', icon: DatabaseBackup, color: '#DCFCE7', iconColor: '#16A34A', route: '/dashboard/backup', soon: false },
+    { label: 'Log', icon: ClipboardList, color: '#FFE4E6', iconColor: '#E11D48', route: '/dashboard/log', soon: false },
+  ]
+
   const handleScroll = () => {
     if (!carouselRef.current) return
     const cardWidth = carouselRef.current.offsetWidth / 2
@@ -203,6 +210,14 @@ export default function DashboardPage() {
     carouselRef.current.scrollTo({ left: i * cardWidth, behavior: 'smooth' })
     setActiveCard(i)
   }
+
+  // Hero card values
+  const heroQuota = dailyTarget?.quota || 0
+  const heroSisa = Math.max(0, heroQuota - todayExpense)
+  const heroPct = heroQuota > 0 ? Math.min((todayExpense / heroQuota) * 100, 100) : 0
+  const heroOverLimit = heroQuota > 0 && todayExpense > heroQuota
+
+  const dashLineFromTop = CHART_HEIGHT * DASH_RATIO
 
   const cardItem = (card, i, size) => (
     <div key={i} style={{
@@ -243,14 +258,14 @@ export default function DashboardPage() {
     </div>
   )
 
-  const dashLineFromTop = CHART_HEIGHT * DASH_RATIO
-
   return (
     <div style={{ width: '100%', boxSizing: 'border-box' }}>
       <style>{`
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
         .chart-scroll::-webkit-scrollbar { display: none; }
         .chart-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+        .menu-scroll::-webkit-scrollbar { display: none; }
+        .menu-scroll { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
       {/* Header */}
@@ -259,6 +274,138 @@ export default function DashboardPage() {
         <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
           {user?.email} · {new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
         </p>
+      </div>
+
+      {/* ── HERO CARD + MENU GRID — satu kontainer ── */}
+      <div style={{
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        borderRadius: '20px',
+        marginBottom: '20px',
+        overflow: 'hidden',
+      }}>
+        {/* Hero Card */}
+        {loading ? (
+          <div style={{
+            margin: '12px', borderRadius: '16px', padding: '24px',
+            background: 'var(--border)', height: '160px',
+            animation: 'pulse 1.5s ease-in-out infinite',
+          }} />
+        ) : dailyTarget ? (
+          <div style={{
+            margin: '12px', borderRadius: '16px', padding: '16px 18px',
+            background: 'linear-gradient(135deg, #5b5f97 0%, #4a4e82 100%)',
+            color: '#fff',
+          }}>
+            {/* Row 1: label kiri + badge over-limit kanan */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
+              <div style={{ fontSize: '12px', opacity: 0.75, fontWeight: '500' }}>Sisa kuota hari ini</div>
+              {heroOverLimit && (
+                <div style={{
+                  fontSize: '10px', fontWeight: '700',
+                  background: 'rgba(239,68,68,0.3)', color: '#FCA5A5',
+                  padding: '3px 8px', borderRadius: '99px', whiteSpace: 'nowrap',
+                }}>⚠️ Lewat {fmtShort(todayExpense - heroQuota)}</div>
+              )}
+            </div>
+
+            {/* Nominal */}
+            <div style={{
+              fontSize: '28px', fontWeight: '800', letterSpacing: '-0.5px', marginBottom: '1px',
+              color: heroOverLimit ? '#FCA5A5' : '#fff',
+            }}>{fmt(heroSisa)}</div>
+
+            {/* Sub-label */}
+            <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '10px' }}>
+              dari target {fmt(heroQuota)}/hari
+            </div>
+
+            {/* Progress bar */}
+            <div style={{
+              background: 'rgba(255,255,255,0.2)', borderRadius: '99px',
+              height: '6px', overflow: 'hidden', marginBottom: '12px',
+            }}>
+              <div style={{
+                width: `${heroPct}%`, height: '100%', borderRadius: '99px',
+                background: heroOverLimit ? '#EF4444' : heroPct >= (dailyTarget.warning_pct || 80) ? '#F97316' : '#A5F3A5',
+                transition: 'width 0.6s ease',
+              }} />
+            </div>
+
+            {/* Bottom row */}
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: '10px', opacity: 0.6, marginBottom: '1px' }}>Total saldo</div>
+                <div style={{ fontSize: '14px', fontWeight: '700' }}>{fmt(stats.saldo)}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '10px', opacity: 0.6, marginBottom: '1px' }}>Terpakai hari ini</div>
+                <div style={{ fontSize: '14px', fontWeight: '700' }}>{fmt(todayExpense)}</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Menu Grid — scrollable horizontal, snap per item */}
+        <div
+          className="menu-scroll"
+          style={{
+            display: 'flex',
+            overflowX: 'auto',
+            scrollSnapType: 'x mandatory',
+            gap: '4px',
+            padding: '12px 16px 16px',
+          }}
+        >
+          {menuItems.map((item) => {
+            const Icon = item.icon
+            return (
+              <div
+                key={item.label}
+                onClick={() => !item.soon && router.push(item.route)}
+                style={{
+                  minWidth: '72px',
+                  width: '72px',
+                  flexShrink: 0,
+                  scrollSnapAlign: 'start',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '6px',
+                  cursor: item.soon ? 'default' : 'pointer',
+                }}
+              >
+                <div style={{ position: 'relative' }}>
+                  <div style={{
+                    width: '52px', height: '52px', borderRadius: '14px',
+                    background: item.color,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Icon size={22} color={item.iconColor} strokeWidth={1.8} />
+                  </div>
+                  {item.soon && (
+                    <div style={{
+                      position: 'absolute', top: '-4px', right: '-4px',
+                      background: '#5b5f97', color: '#fff',
+                      fontSize: '8px', fontWeight: '700',
+                      padding: '2px 5px', borderRadius: '6px',
+                      letterSpacing: '0.3px', lineHeight: '1.4',
+                    }}>
+                      SOON
+                    </div>
+                  )}
+                </div>
+                <div style={{
+                  fontSize: '11px', fontWeight: '500',
+                  color: 'var(--text-muted)', textAlign: 'center',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {item.label}
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* ── DIAGRAM PENGELUARAN HARIAN ── */}
@@ -281,11 +428,10 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div style={{ position: 'relative' }}>
-            {/* Dashed line overlay — fixed position */}
             {dailyTarget && (
               <div style={{
                 position: 'absolute',
-                top: dashLineFromTop + 20, // +20 untuk label height di atas bar
+                top: dashLineFromTop + 20,
                 left: 0, right: 0,
                 height: '1px',
                 borderTop: '1.5px dashed var(--accent)',
@@ -322,16 +468,14 @@ export default function DashboardPage() {
                       scrollSnapAlign: 'start',
                     }}
                   >
-                    {/* Area bar dengan label di puncak */}
                     <div style={{
                       width: '100%',
-                      height: CHART_HEIGHT + 20, // +20 untuk ruang label
+                      height: CHART_HEIGHT + 20,
                       display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
                       position: 'relative',
                     }}>
                       {day.total > 0 && (
                         <>
-                          {/* Bar */}
                           <div style={{
                             width: '28px',
                             height: barH,
@@ -340,7 +484,6 @@ export default function DashboardPage() {
                             position: 'relative',
                             zIndex: 1,
                           }} />
-                          {/* Label di puncak bar */}
                           <div style={{
                             position: 'absolute',
                             bottom: barH + 3,
@@ -356,7 +499,6 @@ export default function DashboardPage() {
                       )}
                     </div>
 
-                    {/* Label hari & tanggal */}
                     <div style={{ textAlign: 'center', marginTop: '4px' }}>
                       <div style={{
                         fontSize: '11px',
@@ -370,14 +512,12 @@ export default function DashboardPage() {
                       }}>{day.dateLabel}</div>
                     </div>
 
-                    {/* Segitiga penunjuk hari ini */}
                     {day.isToday && (
                       <div style={{
                         width: 0, height: 0,
                         borderLeft: '5px solid transparent',
                         borderRight: '5px solid transparent',
                         borderBottom: '7px solid var(--primary)',
-                        // marginTop: '4px',
                       }} />
                     )}
                   </div>
