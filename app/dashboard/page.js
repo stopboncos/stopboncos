@@ -15,8 +15,6 @@ import {
 
 export default function DashboardPage() {
   const [user, setUser] = useState(null)
-  const [activeCard, setActiveCard] = useState(0)
-  const carouselRef = useRef(null)
   const chartRef = useRef(null)
   const router = useRouter()
 
@@ -50,7 +48,8 @@ export default function DashboardPage() {
         supabase.from('transactions')
           .select('*, categories(name, icon, color)')
           .eq('user_id', user.id)
-          .order('date', { ascending: false }),
+          .order('date', { ascending: false })
+          .order('created_at', { ascending: false }),
         supabase.from('targets')
           .select('*, categories(name, icon, color)')
           .eq('user_id', user.id),
@@ -77,7 +76,6 @@ export default function DashboardPage() {
         .filter(t => t.type === 'expense' && t.date >= startOfMonth && t.date <= endOfMonthStr)
         .reduce((s, t) => s + Number(t.amount), 0)
 
-      // Pengeluaran hari ini
       const todayTotal = txs
         .filter(t => t.type === 'expense' && t.date === todayStr)
         .reduce((s, t) => s + Number(t.amount), 0)
@@ -86,6 +84,7 @@ export default function DashboardPage() {
       const periode = `${new Date(startOfMonth).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })} - ${endOfMonth.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}`
       setPeriodeLabel(periode)
 
+      const dayNames = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
       const days = []
       for (let i = 29; i >= -1; i--) {
         const d = new Date(today)
@@ -94,7 +93,6 @@ export default function DashboardPage() {
         const total = txs
           .filter(t => t.type === 'expense' && t.date === dateStr)
           .reduce((s, t) => s + Number(t.amount), 0)
-        const dayNames = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
         days.push({
           date: dateStr,
           total,
@@ -183,10 +181,10 @@ export default function DashboardPage() {
   }
 
   const cards = [
-    { label: 'Total Saldo', value: fmt(stats.saldo), icon: '👛', bg: 'var(--primary-light)', change: '+12%', changeColor: '#22C55E' },
-    { label: periodeLabel, value: fmt(stats.pemasukan), icon: '📈', bg: '#F0FDF4', change: '', changeColor: '' },
-    { label: periodeLabel, value: fmt(stats.pengeluaran), icon: '📉', bg: 'var(--danger-light)', change: '', changeColor: '' },
-    { label: 'Target Lewat', value: stats.targetLewat + ' kategori', icon: '🎯', bg: 'var(--accent-light)', change: '', changeColor: '' },
+    { label: 'Total Saldo', value: fmt(stats.saldo), icon: '👛', bg: 'var(--primary-light)' },
+    { label: periodeLabel, value: fmt(stats.pemasukan), icon: '📈', bg: '#F0FDF4' },
+    { label: periodeLabel, value: fmt(stats.pengeluaran), icon: '📉', bg: 'var(--danger-light)' },
+    { label: 'Target Lewat', value: stats.targetLewat + ' kategori', icon: '🎯', bg: 'var(--accent-light)' },
   ]
 
   const menuItems = [
@@ -198,65 +196,11 @@ export default function DashboardPage() {
     { label: 'Log', icon: ClipboardList, color: '#FFE4E6', iconColor: '#E11D48', route: '/dashboard/log', soon: false },
   ]
 
-  const handleScroll = () => {
-    if (!carouselRef.current) return
-    const cardWidth = carouselRef.current.offsetWidth / 2
-    setActiveCard(Math.round(carouselRef.current.scrollLeft / cardWidth))
-  }
-
-  const scrollToCard = (i) => {
-    if (!carouselRef.current) return
-    const cardWidth = carouselRef.current.offsetWidth / 2
-    carouselRef.current.scrollTo({ left: i * cardWidth, behavior: 'smooth' })
-    setActiveCard(i)
-  }
-
-  // Hero card values
   const heroQuota = dailyTarget?.quota || 0
   const heroSisa = Math.max(0, heroQuota - todayExpense)
   const heroPct = heroQuota > 0 ? Math.min((todayExpense / heroQuota) * 100, 100) : 0
   const heroOverLimit = heroQuota > 0 && todayExpense > heroQuota
-
   const dashLineFromTop = CHART_HEIGHT * DASH_RATIO
-
-  const cardItem = (card, i, size) => (
-    <div key={i} style={{
-      background: 'var(--bg-card)', border: '1px solid var(--border)',
-      borderRadius: '12px', padding: '20px', boxSizing: 'border-box',
-      ...(size === 'carousel' ? {
-        minWidth: 'calc(50% - 6px)', width: 'calc(50% - 6px)',
-        scrollSnapAlign: 'start', flexShrink: 0,
-      } : {})
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-        <div style={{
-          width: '40px', height: '40px', borderRadius: '10px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px',
-          ...(loading ? skeletonStyle : { background: card.bg })
-        }}>
-          {!loading && card.icon}
-        </div>
-        {!loading && card.change && (
-          <span style={{
-            fontSize: '12px', fontWeight: '600', color: card.changeColor,
-            background: card.changeColor === 'var(--danger)' ? 'var(--danger-light)' : '#F0FDF4',
-            padding: '4px 10px', borderRadius: '20px'
-          }}>{card.change}</span>
-        )}
-      </div>
-      {loading ? (
-        <>
-          <div style={{ ...skeletonStyle, height: '26px', width: '70%', marginBottom: '8px' }} />
-          <div style={{ ...skeletonStyle, height: '13px', width: '45%' }} />
-        </>
-      ) : (
-        <>
-          <div style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', marginBottom: '4px' }}>{card.value}</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{card.label}</div>
-        </>
-      )}
-    </div>
-  )
 
   return (
     <div style={{ width: '100%', boxSizing: 'border-box' }}>
@@ -276,7 +220,7 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* ── HERO CARD + MENU GRID — satu kontainer ── */}
+      {/* Hero Card + Menu */}
       <div style={{
         background: 'var(--bg-card)',
         border: '1px solid var(--border)',
@@ -297,7 +241,6 @@ export default function DashboardPage() {
             background: 'linear-gradient(135deg, #5b5f97 0%, #4a4e82 100%)',
             color: '#fff',
           }}>
-            {/* Row 1: label kiri + badge over-limit kanan */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
               <div style={{ fontSize: '12px', opacity: 0.75, fontWeight: '500' }}>Sisa kuota hari ini</div>
               {heroOverLimit && (
@@ -308,19 +251,13 @@ export default function DashboardPage() {
                 }}>⚠️ Lewat {fmtShort(todayExpense - heroQuota)}</div>
               )}
             </div>
-
-            {/* Nominal */}
             <div style={{
               fontSize: '28px', fontWeight: '800', letterSpacing: '-0.5px', marginBottom: '1px',
               color: heroOverLimit ? '#FCA5A5' : '#fff',
             }}>{fmt(heroSisa)}</div>
-
-            {/* Sub-label */}
             <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '10px' }}>
               dari target {fmt(heroQuota)}/hari
             </div>
-
-            {/* Progress bar */}
             <div style={{
               background: 'rgba(255,255,255,0.2)', borderRadius: '99px',
               height: '6px', overflow: 'hidden', marginBottom: '12px',
@@ -331,8 +268,6 @@ export default function DashboardPage() {
                 transition: 'width 0.6s ease',
               }} />
             </div>
-
-            {/* Bottom row */}
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <div>
                 <div style={{ fontSize: '10px', opacity: 0.6, marginBottom: '1px' }}>Total saldo</div>
@@ -346,7 +281,7 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
-        {/* Menu Grid — scrollable horizontal, snap per item */}
+        {/* Menu Grid */}
         <div
           className="menu-scroll"
           style={{
@@ -364,14 +299,9 @@ export default function DashboardPage() {
                 key={item.label}
                 onClick={() => !item.soon && router.push(item.route)}
                 style={{
-                  minWidth: '72px',
-                  width: '72px',
-                  flexShrink: 0,
+                  minWidth: '72px', width: '72px', flexShrink: 0,
                   scrollSnapAlign: 'start',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '6px',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
                   cursor: item.soon ? 'default' : 'pointer',
                 }}
               >
@@ -390,25 +320,20 @@ export default function DashboardPage() {
                       fontSize: '8px', fontWeight: '700',
                       padding: '2px 5px', borderRadius: '6px',
                       letterSpacing: '0.3px', lineHeight: '1.4',
-                    }}>
-                      SOON
-                    </div>
+                    }}>SOON</div>
                   )}
                 </div>
                 <div style={{
                   fontSize: '11px', fontWeight: '500',
-                  color: 'var(--text-muted)', textAlign: 'center',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {item.label}
-                </div>
+                  color: 'var(--text-muted)', textAlign: 'center', whiteSpace: 'nowrap',
+                }}>{item.label}</div>
               </div>
             )
           })}
         </div>
       </div>
 
-      {/* ── DIAGRAM PENGELUARAN HARIAN ── */}
+      {/* Diagram Pengeluaran Harian */}
       <div style={{
         background: 'var(--bg-card)', border: '1px solid var(--border)',
         borderRadius: '16px', padding: '16px 0 0', marginBottom: '20px', overflow: 'hidden',
@@ -440,15 +365,12 @@ export default function DashboardPage() {
                 pointerEvents: 'none',
               }} />
             )}
-
             <div
               ref={chartRef}
               className="chart-scroll"
               style={{
-                overflowX: 'auto',
-                display: 'flex',
-                padding: '0 16px',
-                gap: GAP,
+                overflowX: 'auto', display: 'flex',
+                padding: '0 16px', gap: GAP,
                 scrollSnapType: 'x mandatory',
               }}
             >
@@ -457,48 +379,36 @@ export default function DashboardPage() {
                 const barColor = getBarColor(day.total, dailyTarget)
                 const labelColor = getLabelColor(day.total, dailyTarget)
                 const label = day.total > 0 ? fmtShort(day.total) : ''
-
                 return (
                   <div
                     key={day.date}
                     style={{
                       minWidth: BAR_WIDTH, width: BAR_WIDTH,
                       display: 'flex', flexDirection: 'column', alignItems: 'center',
-                      flexShrink: 0, paddingBottom: '12px',
-                      scrollSnapAlign: 'start',
+                      flexShrink: 0, paddingBottom: '12px', scrollSnapAlign: 'start',
                     }}
                   >
                     <div style={{
-                      width: '100%',
-                      height: CHART_HEIGHT + 20,
+                      width: '100%', height: CHART_HEIGHT + 20,
                       display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
                       position: 'relative',
                     }}>
                       {day.total > 0 && (
                         <>
                           <div style={{
-                            width: '28px',
-                            height: barH,
+                            width: '28px', height: barH,
                             borderRadius: '6px 6px 4px 4px',
                             background: barColor,
-                            position: 'relative',
-                            zIndex: 1,
+                            position: 'relative', zIndex: 1,
                           }} />
                           <div style={{
-                            position: 'absolute',
-                            bottom: barH + 3,
-                            fontSize: '10px',
-                            fontWeight: '600',
-                            color: labelColor,
-                            whiteSpace: 'nowrap',
-                            zIndex: 3,
-                          }}>
-                            {label}
-                          </div>
+                            position: 'absolute', bottom: barH + 3,
+                            fontSize: '10px', fontWeight: '600',
+                            color: labelColor, whiteSpace: 'nowrap', zIndex: 3,
+                          }}>{label}</div>
                         </>
                       )}
                     </div>
-
                     <div style={{ textAlign: 'center', marginTop: '4px' }}>
                       <div style={{
                         fontSize: '11px',
@@ -511,7 +421,6 @@ export default function DashboardPage() {
                         color: day.isToday ? 'var(--text)' : 'var(--text-muted)',
                       }}>{day.dateLabel}</div>
                     </div>
-
                     {day.isToday && (
                       <div style={{
                         width: 0, height: 0,
@@ -528,45 +437,13 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Desktop Grid */}
-      <div className="stat-grid">
-        {cards.map((card, i) => cardItem(card, i, 'sm'))}
-      </div>
-
-      {/* Mobile Carousel */}
-      <div className="stat-carousel">
-        <div
-          ref={carouselRef}
-          onScroll={handleScroll}
-          style={{
-            display: 'flex', overflowX: 'scroll',
-            scrollSnapType: 'x mandatory', scrollbarWidth: 'none',
-            msOverflowStyle: 'none', gap: 12,
-            marginLeft: '-16px', marginRight: '-16px',
-            paddingLeft: '16px', paddingRight: '16px',
-            scrollPaddingLeft: '16px',
-          }}
-        >
-          {cards.map((card, i) => cardItem(card, i, 'carousel'))}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginTop: '12px' }}>
-          {cards.slice(0, cards.length - 1).map((_, i) => (
-            <div key={i} onClick={() => scrollToCard(i)} style={{
-              width: activeCard === i ? '20px' : '6px', height: '6px',
-              borderRadius: '3px', cursor: 'pointer', transition: 'all 0.3s',
-              background: activeCard === i ? 'var(--primary)' : 'var(--border)',
-            }} />
-          ))}
-        </div>
-      </div>
-
-      {/* Section row */}
-      <div className="section-row" style={{ marginTop: '16px' }}>
+      {/* Section: Target + Transaksi */}
+      <div className="section-row" style={{ marginBottom: '16px' }}>
 
         {/* Status Target */}
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-            <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>Status Target</div>
+            <div style={{ fontWeight: '600', fontSize: '15px', color: 'var(--text)' }}>Pantau Pengeluaran</div>
             <button onClick={() => router.push('/dashboard/target')} style={{ fontSize: '13px', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Kelola →</button>
           </div>
           {loading ? (
@@ -662,8 +539,11 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
-                  <div style={{ fontSize: '14px', fontWeight: '600', color: t.type === 'income' ? '#22C55E' : 'var(--danger)' }}>
-                    {t.type === 'income' ? '+' : '-'}{fmt(Number(t.amount))}
+                  <div style={{
+                    fontSize: '14px', fontWeight: '600',
+                    color: t.type === 'income' ? '#22C55E' : t.type === 'transfer' ? 'var(--text-muted)' : 'var(--danger)'
+                  }}>
+                    {t.type === 'income' ? '+' : t.type === 'transfer' ? '↔' : '-'}{fmt(Number(t.amount))}
                   </div>
                 </div>
               ))}
@@ -671,6 +551,45 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Stat Grid 2x2 */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: '10px',
+        marginBottom: '16px',
+      }}>
+        {cards.map((card, i) => (
+          <div key={i} style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: '12px',
+            padding: '12px',
+            boxSizing: 'border-box',
+          }}>
+            <div style={{
+              width: '32px', height: '32px', borderRadius: '8px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '16px', marginBottom: '8px',
+              ...(loading ? skeletonStyle : { background: card.bg })
+            }}>
+              {!loading && card.icon}
+            </div>
+            {loading ? (
+              <>
+                <div style={{ ...skeletonStyle, height: '18px', width: '70%', marginBottom: '6px' }} />
+                <div style={{ ...skeletonStyle, height: '11px', width: '50%' }} />
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text)', marginBottom: '2px' }}>{card.value}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.3' }}>{card.label}</div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
     </div>
   )
 }

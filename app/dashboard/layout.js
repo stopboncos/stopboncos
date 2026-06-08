@@ -786,7 +786,7 @@ function DashboardLayoutInner({ children }) {
             background: 'var(--bg)',
             // borderTop: '1px solid var(--border)',
             display: 'flex', alignItems: 'center',
-            height: '64px',
+            height: '100px',
             zIndex: 50,
             paddingBottom: 'env(safe-area-inset-bottom)',
           }}>

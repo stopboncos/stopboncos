@@ -171,7 +171,7 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
             {[
               { key: 'expense', label: '📉 Pengeluaran' },
               { key: 'income', label: '📈 Pemasukan' },
-              { key: 'transfer', label: '🔄 Transfer' },
+              // { key: 'transfer', label: '🔄 Transfer' },
             ].map(t => (
               <button key={t.key}
                 onClick={() => setForm(f => ({ ...f, type: t.key, category_id: '' }))}
@@ -189,7 +189,7 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
         {/* Akun */}
         <div style={{ marginBottom: '14px' }}>
           <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
-            Akun <span style={{ color: 'var(--danger)' }}>*</span>
+            Sumber dana <span style={{ color: 'var(--danger)' }}>*</span>
           </label>
           <div style={{ position: 'relative' }}>
             <select
@@ -197,7 +197,7 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
               onChange={e => setForm(f => ({ ...f, account_id: e.target.value }))}
               style={{ ...inputStyle, paddingRight: '36px' }}
             >
-              <option value="">Pilih akun</option>
+              <option value="">Pilih dompet</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
             <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)', fontSize: '12px' }}>▾</span>
@@ -255,7 +255,7 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
             placeholder="mis. Makan siang, Gaji April..."
             value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-            rows={3}
+            rows={2}
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
           />
         </div>

@@ -80,33 +80,26 @@ export default function AkunPage() {
   const [loading, setLoading] = useState(true)
   const [userId, setUserId] = useState(null)
 
-  // Modal tambah akun
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ name: '', type: 'Rekening Bank', balance: '', color: '#5B5F97', notes: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  // Modal edit akun
   const [showEditModal, setShowEditModal] = useState(false)
   const [editForm, setEditForm] = useState(null)
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState('')
 
-  // Modal top-up saldo
   const [showTopupModal, setShowTopupModal] = useState(false)
   const [topupTarget, setTopupTarget] = useState(null)
   const getLocalDate = () => {
     const d = new Date()
-    const yyyy = d.getFullYear()
-    const mm = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    return `${yyyy}-${mm}-${dd}`
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
   }
   const [topupForm, setTopupForm] = useState({ jumlah: '', sumber: '', catatan: '', tanggal: getLocalDate() })
   const [topupSaving, setTopupSaving] = useState(false)
   const [topupError, setTopupError] = useState('')
 
-  // Net change per akun
   const [netChanges, setNetChanges] = useState({})
 
   useEffect(() => { init() }, [])
@@ -127,44 +120,22 @@ export default function AkunPage() {
     setLoading(false)
   }
 
-  // ✅ FIX: Hitung net change dengan benar termasuk transaksi transfer
   const fetchNetChanges = async (accounts) => {
     if (!accounts.length) return
     const ids = accounts.map(a => a.id)
-
-    // Ambil semua transaksi yang melibatkan akun-akun ini (sebagai sumber ATAU tujuan)
-    const { data: asSumber } = await supabase
-      .from('transactions')
-      .select('account_id, account_to_id, type, amount')
-      .in('account_id', ids)
-
-    const { data: asTujuan } = await supabase
-      .from('transactions')
-      .select('account_id, account_to_id, type, amount')
-      .in('account_to_id', ids)
-
+    const { data: asSumber } = await supabase.from('transactions').select('account_id, account_to_id, type, amount').in('account_id', ids)
+    const { data: asTujuan } = await supabase.from('transactions').select('account_id, account_to_id, type, amount').in('account_to_id', ids)
     const changes = {}
     ids.forEach(id => { changes[id] = 0 })
-
-    // Transaksi di mana akun adalah account_id (sumber/pemilik utama)
     ;(asSumber || []).forEach(tx => {
-      if (tx.type === 'income') {
-        changes[tx.account_id] = (changes[tx.account_id] || 0) + tx.amount
-      } else if (tx.type === 'expense') {
-        changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
-      } else if (tx.type === 'transfer') {
-        // account_id = sumber transfer → saldo berkurang
-        changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
-      }
+      if (tx.type === 'income') changes[tx.account_id] = (changes[tx.account_id] || 0) + tx.amount
+      else if (tx.type === 'expense') changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
+      else if (tx.type === 'transfer') changes[tx.account_id] = (changes[tx.account_id] || 0) - tx.amount
     })
-
-    // Transaksi transfer di mana akun adalah account_to_id (tujuan transfer) → saldo bertambah
     ;(asTujuan || []).forEach(tx => {
-      if (tx.type === 'transfer' && tx.account_to_id && ids.includes(tx.account_to_id)) {
+      if (tx.type === 'transfer' && tx.account_to_id && ids.includes(tx.account_to_id))
         changes[tx.account_to_id] = (changes[tx.account_to_id] || 0) + tx.amount
-      }
     })
-
     setNetChanges(changes)
   }
 
@@ -173,7 +144,6 @@ export default function AkunPage() {
     return count || 0
   }
 
-  // --- Tambah Akun ---
   const handleSave = async () => {
     if (!form.name) { setError('Nama dompet wajib diisi'); return }
     setSaving(true); setError('')
@@ -191,7 +161,6 @@ export default function AkunPage() {
     setSaving(false)
   }
 
-  // --- Edit Akun ---
   const openEdit = (akun) => {
     setEditForm({ id: akun.id, name: akun.name, type: akun.type, balance: akun.balance, color: akun.color, notes: akun.notes || '' })
     setEditError('')
@@ -218,7 +187,6 @@ export default function AkunPage() {
     setEditSaving(false)
   }
 
-  // --- Hapus ---
   const handleDelete = async (akun) => {
     const count = await checkTxCount(akun.id)
     if (count > 0) { alert(`Tidak bisa dihapus — akun ini masih digunakan di ${count} transaksi.`); return }
@@ -228,7 +196,6 @@ export default function AkunPage() {
     fetchAkun()
   }
 
-  // --- Top-up / Transfer Saldo ---
   const openTopup = (akun) => {
     setTopupTarget(akun)
     setTopupForm({ jumlah: '', sumber: '', catatan: '', tanggal: getLocalDate() })
@@ -236,71 +203,35 @@ export default function AkunPage() {
     setShowTopupModal(true)
   }
 
-  // handleTopup — khusus transfer antar dompet
   const handleTopup = async () => {
     if (!topupForm.jumlah || isNaN(topupForm.jumlah) || parseFloat(topupForm.jumlah) <= 0) {
       setTopupError('Jumlah harus diisi dan lebih dari 0'); return
     }
-    if (!topupForm.sumber) {
-      setTopupError('Pilih dompet asal terlebih dahulu'); return
-    }
+    if (!topupForm.sumber) { setTopupError('Pilih dompet asal terlebih dahulu'); return }
     setTopupSaving(true); setTopupError('')
-
     const jumlah = parseFloat(topupForm.jumlah)
-
-    // Format tanggal ISO dengan offset WITA +08:00
     const [yy, mo, dd] = topupForm.tanggal.split('-').map(Number)
     const pad = n => String(n).padStart(2, '0')
     const isoDate = `${yy}-${pad(mo)}-${pad(dd)}T12:00:00+08:00`
-
-    {
-      // Transfer antar dompet
-      // Cari dompet sumber
-      const sumberAkun = akuns.find(a => a.id === topupForm.sumber)
-      if (!sumberAkun) { setTopupError('Dompet sumber tidak ditemukan'); setTopupSaving(false); return }
-
-      // Cek saldo sumber cukup
-      if ((sumberAkun.balance || 0) < jumlah) {
-        setTopupError(`Saldo ${sumberAkun.name} tidak cukup (${fmt(sumberAkun.balance)})`);
-        setTopupSaving(false); return
-      }
-
-      // 1) Kurangi saldo dompet SUMBER
-      const { error: errSumber } = await supabase
-        .from('accounts')
-        .update({ balance: (sumberAkun.balance || 0) - jumlah })
-        .eq('id', topupForm.sumber)
-      if (errSumber) { setTopupError(errSumber.message); setTopupSaving(false); return }
-
-      // 2) Tambah saldo dompet TUJUAN
-      const { error: errTujuan } = await supabase
-        .from('accounts')
-        .update({ balance: (topupTarget.balance || 0) + jumlah })
-        .eq('id', topupTarget.id)
-      if (errTujuan) { setTopupError(errTujuan.message); setTopupSaving(false); return }
-
-      // 3) Catat 1 transaksi tipe 'transfer'
-      //    account_id   = sumber (yang berkurang)
-      //    account_to_id = tujuan (yang bertambah)
-      const { error: errTx } = await supabase.from('transactions').insert({
-        user_id: userId,
-        account_id: topupForm.sumber,          // sumber
-        account_to_id: topupTarget.id,         // tujuan
-        type: 'transfer',
-        amount: jumlah,
-        category_id: null,
-        description: topupForm.catatan || `Transfer ke ${topupTarget.name}`,
-        date: isoDate,
-      })
-      if (errTx) { setTopupError(errTx.message); setTopupSaving(false); return }
-
-      await logActivity(userId, 'akun', topupTarget.id, 'transfer',
-        { from: sumberAkun.name, balance_sumber: sumberAkun.balance },
-        { to: topupTarget.name, balance_tujuan: topupTarget.balance, jumlah }
-      )
-
+    const sumberAkun = akuns.find(a => a.id === topupForm.sumber)
+    if (!sumberAkun) { setTopupError('Dompet sumber tidak ditemukan'); setTopupSaving(false); return }
+    if ((sumberAkun.balance || 0) < jumlah) {
+      setTopupError(`Saldo ${sumberAkun.name} tidak cukup (${fmt(sumberAkun.balance)})`); setTopupSaving(false); return
     }
-
+    const { error: errSumber } = await supabase.from('accounts').update({ balance: (sumberAkun.balance || 0) - jumlah }).eq('id', topupForm.sumber)
+    if (errSumber) { setTopupError(errSumber.message); setTopupSaving(false); return }
+    const { error: errTujuan } = await supabase.from('accounts').update({ balance: (topupTarget.balance || 0) + jumlah }).eq('id', topupTarget.id)
+    if (errTujuan) { setTopupError(errTujuan.message); setTopupSaving(false); return }
+    const { error: errTx } = await supabase.from('transactions').insert({
+      user_id: userId, account_id: topupForm.sumber, account_to_id: topupTarget.id,
+      type: 'transfer', amount: jumlah, category_id: null,
+      description: topupForm.catatan || `Transfer ke ${topupTarget.name}`, date: isoDate,
+    })
+    if (errTx) { setTopupError(errTx.message); setTopupSaving(false); return }
+    await logActivity(userId, 'akun', topupTarget.id, 'transfer',
+      { from: sumberAkun.name, balance_sumber: sumberAkun.balance },
+      { to: topupTarget.name, balance_tujuan: topupTarget.balance, jumlah }
+    )
     setShowTopupModal(false)
     fetchAkun()
     setTopupSaving(false)
@@ -315,20 +246,19 @@ export default function AkunPage() {
   const totalSaldo = akuns.reduce((sum, a) => sum + (a.balance || 0), 0)
 
   return (
-    <div style={{ width: '100%', maxWidth: '560px', margin: '0 auto', boxSizing: 'border-box' }}>
+    <div style={{ width: '100%', boxSizing: 'border-box' }}>
       {/* Header */}
-      <div style={{ marginBottom: '20px' }}>
+      <div style={{ marginBottom: '16px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: '700', color: 'var(--text)', margin: '0 0 4px' }}>Akun Dompet</h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
           Total saldo: <strong style={{ color: 'var(--text)' }}>{fmt(totalSaldo)}</strong>
         </p>
       </div>
 
-      {/* List dompet */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>Memuat...</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {akuns.map(akun => {
             const net = netChanges[akun.id] ?? 0
             const isPositive = net >= 0
@@ -338,15 +268,15 @@ export default function AkunPage() {
                 background: 'var(--bg-card)',
                 border: '1px solid var(--border)',
                 borderRadius: '14px',
-                padding: '14px 16px',
+                padding: '12px 14px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '10px',
+                gap: '8px',
               }}>
                 {/* Row 1: icon + name/type + notes pill + edit + delete */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <div style={{
-                    width: '40px', height: '40px', borderRadius: '50%',
+                    width: '38px', height: '38px', borderRadius: '50%',
                     background: akun.color + '18',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     flexShrink: 0,
@@ -361,13 +291,13 @@ export default function AkunPage() {
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: '5px', padding: '3px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', flexShrink: 1 }}>{akun.notes}</div>
                   )}
                   <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
-                    <button onClick={() => openEdit(akun)} title="Edit" style={{ background: 'none', border: 'none', padding: '6px', cursor: 'pointer', color: 'var(--text-muted)', borderRadius: '6px', display: 'flex', alignItems: 'center' }}>
+                    <button onClick={() => openEdit(akun)} title="Edit" style={{ background: 'none', border: 'none', padding: '5px', cursor: 'pointer', color: 'var(--text-muted)', borderRadius: '6px', display: 'flex', alignItems: 'center' }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                         <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                       </svg>
                     </button>
-                    <button onClick={() => handleDelete(akun)} title="Hapus" style={{ background: 'none', border: 'none', padding: '6px', cursor: 'pointer', color: 'var(--danger)', borderRadius: '6px', display: 'flex', alignItems: 'center' }}>
+                    <button onClick={() => handleDelete(akun)} title="Hapus" style={{ background: 'none', border: 'none', padding: '5px', cursor: 'pointer', color: 'var(--danger)', borderRadius: '6px', display: 'flex', alignItems: 'center' }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="3 6 5 6 21 6"/>
                         <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
@@ -379,10 +309,10 @@ export default function AkunPage() {
                 </div>
 
                 {/* Row 2: saldo + tombol tambah saldo */}
-                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text)', letterSpacing: '-0.3px', lineHeight: '1.1' }}>{fmt(akun.balance)}</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Saldo saat ini</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>Saldo saat ini</div>
                   </div>
                   <button
                     onClick={() => openTopup(akun)}
@@ -413,7 +343,7 @@ export default function AkunPage() {
                 <div style={{ height: '1px', background: 'var(--border)' }} />
 
                 {/* Row 3: Awal & Perubahan */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Awal</span>
                     <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text)' }}>{fmt(initialBal)}</span>
@@ -442,7 +372,7 @@ export default function AkunPage() {
               padding: '13px',
               background: 'transparent',
               color: 'var(--text-muted)',
-              border: '1.5px dashed var(--border)',
+              border: '1.5px dashed var(--text-muted)',
               borderRadius: '14px',
               fontSize: '13px',
               fontWeight: '600',
@@ -450,12 +380,13 @@ export default function AkunPage() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '7px',
               marginTop: '2px',
-              transition: 'border-color 0.15s, color 0.15s',
+              gap: '7px',
+              opacity: 0.5,
+              transition: 'opacity 0.15s, border-color 0.15s, color 0.15s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'var(--primary)' }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-muted)' }}
+            onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'var(--primary)' }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.borderColor = 'var(--text-muted)'; e.currentTarget.style.color = 'var(--text-muted)' }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -525,7 +456,6 @@ export default function AkunPage() {
           <Field label="Jumlah (Rp) *">
             <input type="number" value={topupForm.jumlah} onChange={e => setTopupForm({ ...topupForm, jumlah: e.target.value })} placeholder="0" style={inputStyle} />
           </Field>
-
           <Field label="Dompet Asal *">
             <select value={topupForm.sumber} onChange={e => setTopupForm({ ...topupForm, sumber: e.target.value })} style={inputStyle}>
               <option value="">Pilih dompet asal</option>
@@ -539,62 +469,28 @@ export default function AkunPage() {
               </div>
             )}
           </Field>
-
           <Field label="Catatan (opsional)">
             <input value={topupForm.catatan} onChange={e => setTopupForm({ ...topupForm, catatan: e.target.value })} placeholder={`Transfer ke ${topupTarget.name}`} style={inputStyle} />
           </Field>
           <Field label="Tanggal">
             <input type="date" value={topupForm.tanggal} onChange={e => setTopupForm({ ...topupForm, tanggal: e.target.value })} style={inputStyle} />
           </Field>
-          <ModalFooter
-            onCancel={() => setShowTopupModal(false)}
-            onSave={handleTopup}
-            saving={topupSaving}
-            saveLabel="Transfer Sekarang"
-          />
+          <ModalFooter onCancel={() => setShowTopupModal(false)} onSave={handleTopup} saving={topupSaving} saveLabel="Transfer Sekarang" />
         </ModalWrapper>
       )}
     </div>
   )
 }
 
-// ---- Shared sub-components ----
-
 function ModalWrapper({ children, onClose }) {
   return (
     <>
       <style>{`
-        @keyframes modalBackdropIn {
-          from { opacity: 0; }
-          to   { opacity: 1; }
-        }
-        @keyframes modalSlideUp {
-          from { opacity: 0; transform: translateY(24px) scale(0.96); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
-        }
+        @keyframes modalBackdropIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes modalSlideUp { from { opacity: 0; transform: translateY(24px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
       `}</style>
-      <div
-        onClick={onClose}
-        style={{
-          position: 'fixed', inset: 0,
-          background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 200, padding: '16px',
-          animation: 'modalBackdropIn 0.2s ease both',
-        }}
-      >
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{
-            background: 'var(--bg-card)',
-            borderRadius: '12px',
-            width: '440px', maxWidth: '100%',
-            padding: '24px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-            maxHeight: '90vh', overflowY: 'auto',
-            animation: 'modalSlideUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both',
-          }}
-        >
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px', animation: 'modalBackdropIn 0.2s ease both' }}>
+        <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-card)', borderRadius: '12px', width: '440px', maxWidth: '100%', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)', maxHeight: '90vh', overflowY: 'auto', animation: 'modalSlideUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both' }}>
           {children}
         </div>
       </div>

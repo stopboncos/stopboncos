@@ -142,11 +142,33 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
             style={inputStyle}
           />
         </div>
+        {/* Tipe */}
+        <div style={{ marginBottom: '14px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+            Tipe
+          </label>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {[
+              { key: 'expense', label: '📉 Pengeluaran' },
+              { key: 'income', label: '📈 Pemasukan' },
+            ].map(t => (
+              <button key={t.key}
+                onClick={() => setForm(f => ({ ...f, type: t.key, category_id: '' }))}
+                style={{
+                  flex: 1, padding: '8px 4px', border: '1px solid', fontSize: '11px', borderRadius: '8px', cursor: 'pointer',
+                  borderColor: form.type === t.key ? 'var(--primary)' : 'var(--border)',
+                  background: form.type === t.key ? 'var(--primary-light)' : 'transparent',
+                  color: form.type === t.key ? 'var(--primary)' : 'var(--text-muted)',
+                }}
+              >{t.label}</button>
+            ))}
+          </div>
+        </div>
 
         {/* Akun */}
         <div style={{ marginBottom: '14px' }}>
           <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
-            Dokumen / Metode <span style={{ color: 'var(--danger)' }}>*</span>
+            Sumber dana <span style={{ color: 'var(--danger)' }}>*</span>
           </label>
           <div style={{ position: 'relative' }}>
             <select
@@ -154,7 +176,7 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
               onChange={e => setForm(f => ({ ...f, account_id: e.target.value }))}
               style={{ ...inputStyle, paddingRight: '36px' }}
             >
-              <option value="">Pilih akun</option>
+              <option value="">Pilih dompet</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
             <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)', fontSize: '12px' }}>▾</span>
@@ -173,7 +195,9 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
               style={{ ...inputStyle, paddingRight: '36px' }}
             >
               <option value="">Tanpa kategori</option>
-              {categories.map(c => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ${c.name}` : c.name}</option>)}
+              {categories
+                .filter(c => c.type === (form.type === 'income' ? 'income' : 'expense'))
+                .map(c => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ${c.name}` : c.name}</option>)}
             </select>
             <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)', fontSize: '12px' }}>▾</span>
           </div>
@@ -188,7 +212,7 @@ function TransaksiModal({ isOpen, onClose, onSaved, editData, accounts, categori
             placeholder="mis. Makan siang, Gaji April..."
             value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-            rows={3}
+            rows={2}
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
           />
         </div>
@@ -372,7 +396,7 @@ export default function TransaksiPage() {
     const { data: { user } } = await supabase.auth.getUser()
     const [{ data: acc }, { data: cat }] = await Promise.all([
       supabase.from('accounts').select('id, name').eq('user_id', user.id),
-      supabase.from('categories').select('id, name, icon').eq('user_id', user.id),
+      supabase.from('categories').select('id, name, icon, type').eq('user_id', user.id),
     ])
     setAccounts(acc || [])
     setCategories(cat || [])
@@ -486,11 +510,11 @@ export default function TransaksiPage() {
   const isSearching = searchQuery.trim().length > 0
   const filteredList = isSearching
     ? transaksi.filter(tx =>
-        (tx.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (tx.categories?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (tx.accounts?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (tx.account_to?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
-      )
+      (tx.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (tx.categories?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (tx.accounts?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (tx.account_to?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+    )
     : transaksi
 
   const groupByDate = (list) => {
@@ -687,7 +711,7 @@ export default function TransaksiPage() {
           </p>
         </div>
         <button onClick={openAddModal} style={{
-          display: 'flex', alignItems: 'center', gap: '5px',
+          display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: '5px',
           padding: '9px 14px', background: 'var(--primary)', color: 'white',
           border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer',
           flexShrink: 0,
