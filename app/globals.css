@@ -109,6 +109,13 @@ img.app-logo-lg {
 input, textarea, select {
   font-size: 16px !important;
 }
+input[type="date"],
+input[type="month"] {
+  max-width: 100%;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+}
 
 
 @media (max-width: 767px) {
