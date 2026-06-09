@@ -27,7 +27,6 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
 
-  // Kalau props dikirim dari luar, pakai props. Kalau tidak (dipanggil dari layout), fetch sendiri.
   useEffect(() => {
     if (accountsProp) setAccounts(accountsProp)
     if (categoriesProp) setCategories(categoriesProp)
@@ -41,7 +40,7 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
     const { data: { user } } = await supabase.auth.getUser()
     const [{ data: acc }, { data: cat }] = await Promise.all([
       supabase.from('accounts').select('id, name').eq('user_id', user.id),
-      supabase.from('categories').select('id, name, icon').eq('user_id', user.id),
+      supabase.from('categories').select('id, name, icon, type').eq('user_id', user.id),
     ])
     setAccounts(acc || [])
     setCategories(cat || [])
@@ -70,28 +69,87 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
     setTimeout(onClose, 300)
   }
 
+  const applyBalanceDelta = (balance, type, amount, direction = 'apply') => {
+    // direction: 'apply' = tambah efek transaksi, 'revert' = balik efek transaksi
+    const sign = direction === 'revert' ? -1 : 1
+    if (type === 'income') return balance + sign * amount
+    if (type === 'expense') return balance - sign * amount
+    return balance
+  }
+
   const handleSave = async () => {
     if (!form.amount || !form.account_id) return
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = {
-      user_id: user.id,
-      amount: Number(form.amount),
-      account_id: form.account_id,
-      category_id: form.category_id || null,
-      description: form.description,
-      date: form.date,
-      type: form.type,
-    }
+    const amount = Number(form.amount)
+
     if (editData?.id) {
-      await supabase.from('transactions').update(payload).eq('id', editData.id)
+      // ── EDIT: revert transaksi lama, apply transaksi baru ──
+
+      // Ambil transaksi lama untuk tahu account_id & amount & type aslinya
+      const { data: oldTx } = await supabase
+        .from('transactions')
+        .select('account_id, amount, type')
+        .eq('id', editData.id)
+        .single()
+
+      if (oldTx) {
+        // Revert balance akun lama
+        const { data: oldAkun } = await supabase
+          .from('accounts').select('id, balance').eq('id', oldTx.account_id).single()
+        if (oldAkun) {
+          await supabase.from('accounts').update({
+            balance: applyBalanceDelta(oldAkun.balance, oldTx.type, oldTx.amount, 'revert')
+          }).eq('id', oldAkun.id)
+        }
+      }
+
+      // Update transaksi
+      await supabase.from('transactions').update({
+        amount,
+        account_id: form.account_id,
+        category_id: form.category_id || null,
+        description: form.description,
+        date: form.date,
+        type: form.type,
+      }).eq('id', editData.id)
+
+      // Apply balance akun baru (fetch ulang supaya dapat nilai terkini setelah revert)
+      const { data: newAkun } = await supabase
+        .from('accounts').select('id, balance').eq('id', form.account_id).single()
+      if (newAkun) {
+        await supabase.from('accounts').update({
+          balance: applyBalanceDelta(newAkun.balance, form.type, amount, 'apply')
+        }).eq('id', newAkun.id)
+      }
+
     } else {
-      await supabase.from('transactions').insert(payload)
+      // ── INSERT BARU ──
+
+      // Insert transaksi
+      await supabase.from('transactions').insert({
+        user_id: user.id,
+        amount,
+        account_id: form.account_id,
+        category_id: form.category_id || null,
+        description: form.description,
+        date: form.date,
+        type: form.type,
+      })
+
+      // Update balance akun
+      const { data: akun } = await supabase
+        .from('accounts').select('id, balance').eq('id', form.account_id).single()
+      if (akun) {
+        await supabase.from('accounts').update({
+          balance: applyBalanceDelta(akun.balance, form.type, amount, 'apply')
+        }).eq('id', akun.id)
+      }
     }
+
     setSaving(false)
     close()
     onSaved?.()
-    // Trigger refetch di halaman transaksi kalau sedang buka
     window.dispatchEvent(new Event('refetch-transaksi'))
   }
 
@@ -171,7 +229,6 @@ export default function TransaksiModal({ isOpen, onClose, onSaved, editData, acc
             {[
               { key: 'expense', label: '📉 Pengeluaran' },
               { key: 'income', label: '📈 Pemasukan' },
-              // { key: 'transfer', label: '🔄 Transfer' },
             ].map(t => (
               <button key={t.key}
                 onClick={() => setForm(f => ({ ...f, type: t.key, category_id: '' }))}

@@ -149,7 +149,7 @@ export default function AkunPage() {
     setSaving(true); setError('')
     const { data: inserted, error: err } = await supabase.from('accounts').insert({
       user_id: userId, name: form.name, type: form.type,
-      balance: parseFloat(form.balance) || 0, color: form.color, notes: form.notes,
+      balance: parseFloat(form.balance) || 0, initial_balance: parseFloat(form.balance) || 0, color: form.color, notes: form.notes,
     }).select().single()
     if (err) { setError(err.message) }
     else {
@@ -258,11 +258,11 @@ export default function AkunPage() {
       {loading ? (
         <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>Memuat...</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {akuns.map(akun => {
             const net = netChanges[akun.id] ?? 0
             const isPositive = net >= 0
-            const initialBal = akun.initial_balance ?? (akun.balance - net)
+            const initialBal = akun.initial_balance ?? 0
             return (
               <div key={akun.id} style={{
                 background: 'var(--bg-card)',
@@ -309,7 +309,7 @@ export default function AkunPage() {
                 </div>
 
                 {/* Row 2: saldo + tombol tambah saldo */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text)', letterSpacing: '-0.3px', lineHeight: '1.1' }}>{fmt(akun.balance)}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>Saldo saat ini</div>
@@ -380,7 +380,6 @@ export default function AkunPage() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              marginTop: '2px',
               gap: '7px',
               opacity: 0.5,
               transition: 'opacity 0.15s, border-color 0.15s, color 0.15s',
